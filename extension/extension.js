@@ -1,7 +1,8 @@
 const vscode = require('vscode');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const path = require('path');
 const http = require('http');
+const fs = require('fs');
 
 let relayProcess = null;
 let statusBarItem = null;
@@ -13,6 +14,29 @@ const RELAY_SCRIPT = path.join(__dirname, '..', 'relay-agent.js');
 const RELAY_URL = process.env.CURSOR_WEB_RELAY_URL || 'https://cursorremote.up.railway.app';
 const AUTH_PASSWORD = process.env.CURSOR_WEB_AUTH_PASSWORD || 'admin123';
 const CDP_PORT = '9222';
+
+function findNodeBinary() {
+  const candidates = ['node', 'node.exe'];
+  if (process.env.NVM_BIN) candidates.unshift(path.join(process.env.NVM_BIN, 'node'));
+  if (process.env.NVM_SYMLINK) candidates.unshift(path.join(process.env.NVM_SYMLINK, 'node.exe'));
+
+  const pathDirs = (process.env.PATH || '').split(path.delimiter);
+  for (const dir of pathDirs) {
+    for (const name of ['node.exe', 'node']) {
+      const full = path.join(dir, name);
+      try {
+        if (fs.existsSync(full) && !full.includes('Cursor')) return full;
+      } catch (e) {}
+    }
+  }
+
+  try {
+    const which = execSync('where node', { encoding: 'utf-8', timeout: 5000 }).trim().split('\n')[0].trim();
+    if (which && !which.includes('Cursor')) return which;
+  } catch (e) {}
+
+  return 'node';
+}
 
 function activate(context) {
   outputChannel = vscode.window.createOutputChannel('Cursor Web Relay');
@@ -57,7 +81,9 @@ function startRelay() {
   if (relayProcess && !relayProcess.killed) return;
 
   try {
-    relayProcess = spawn(process.execPath, [RELAY_SCRIPT], {
+    const nodeBin = findNodeBinary();
+    outputChannel.appendLine('Using node: ' + nodeBin);
+    relayProcess = spawn(nodeBin, [RELAY_SCRIPT], {
       env: {
         ...process.env,
         RELAY_URL: RELAY_URL,
@@ -66,6 +92,7 @@ function startRelay() {
         CDP_PORT: CDP_PORT,
         MACHINE_NAME: 'This PC',
       },
+      cwd: path.join(__dirname, '..'),
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
