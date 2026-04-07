@@ -260,7 +260,16 @@
     var isActive = state.agentStatus && state.agentStatus !== 'idle';
     var hasFiles = state.toolbarButtons && state.toolbarButtons.files;
 
-    if (!isActive && !hasFiles) {
+    var chatKey = CA.getChatKey();
+    var loopState = CA.getLoopStateForChat(chatKey);
+    var isWaiting = loopState === 'active';
+    if (!isWaiting && state.activeMcp && state.activeMcp.toolName) {
+      isWaiting = /wait.for.response/i.test(state.activeMcp.toolName);
+    }
+
+    var showToolbarActive = isActive && !isWaiting;
+
+    if (!showToolbarActive && !hasFiles) {
       toolbar.classList.add('hidden');
       return;
     }
@@ -279,8 +288,8 @@
       filesEl.style.display = 'none';
     }
 
-    stopBtn.classList.toggle('hidden', !isActive);
-    reviewBtn.classList.toggle('hidden', !isActive);
+    stopBtn.classList.toggle('hidden', !showToolbarActive);
+    reviewBtn.classList.toggle('hidden', !showToolbarActive);
   }
 
   document.addEventListener('DOMContentLoaded', init);

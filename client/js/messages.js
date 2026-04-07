@@ -119,7 +119,9 @@
             var newCodeLen = (part.code || '').length;
             var oldFilename = (partEl.querySelector('.code-block-filename') || {}).textContent || '';
             var newFilename = part.filename || '';
-            if (oldDiffCount !== newDiffCount || oldCodeLen !== newCodeLen || oldFilename !== newFilename) {
+            var wasStreaming = partEl.classList.contains('streaming');
+            var nowStreaming = !!part.isStreaming;
+            if (oldDiffCount !== newDiffCount || oldCodeLen !== newCodeLen || oldFilename !== newFilename || wasStreaming !== nowStreaming) {
               needsFullRebuild = true; break;
             }
           } else if (part.type === 'todo_list') {
@@ -270,7 +272,7 @@
   }
 
   function renderCodeBlock(el, part) {
-    el.className = 'code-block expanded';
+    el.className = 'code-block expanded' + (part.isStreaming ? ' streaming' : '');
 
     var header = document.createElement('div');
     header.className = 'code-block-header';
@@ -284,8 +286,14 @@
       fileInfo.appendChild(fileIcon);
     }
 
+    if (part.isStreaming) {
+      var spinner = document.createElement('span');
+      spinner.className = 'code-block-spinner codicon codicon-loading codicon-modifier-spin';
+      fileInfo.appendChild(spinner);
+    }
+
     var filename = document.createElement('span');
-    filename.className = 'code-block-filename';
+    filename.className = 'code-block-filename' + (part.isStreaming ? ' make-shine' : '');
     filename.textContent = part.filename || 'file';
     if (part.isNew) filename.textContent += ' (new)';
     fileInfo.appendChild(filename);
@@ -336,7 +344,7 @@
       code.textContent = part.code;
       pre.appendChild(code);
       codeContent.appendChild(pre);
-      if (typeof Prism !== 'undefined') Prism.highlightElement(code);
+      if (!part.isStreaming && typeof Prism !== 'undefined') Prism.highlightElement(code);
     }
 
     el.appendChild(codeContent);

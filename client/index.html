@@ -68,82 +68,102 @@
             <p class="empty-hint">Start Cursor with <code>--remote-debugging-port=9222</code></p>
           </div>
           <div id="setup-guide" class="setup-guide hidden">
-            <div class="setup-guide-header">
-              <span class="codicon codicon-rocket setup-guide-icon"></span>
-              <h2 class="setup-guide-title">Get Started with Cursor Web</h2>
-              <p class="setup-guide-subtitle">Control your Cursor IDE remotely from any device</p>
-            </div>
-            <div class="setup-guide-steps">
-              <div class="setup-step" data-step="1">
-                <div class="setup-step-number"><span>1</span></div>
-                <div class="setup-step-body">
-                  <h3>Launch Cursor with Remote Debugging</h3>
-                  <p>Start Cursor IDE with the CDP flag so this app can connect to it.</p>
-                  <div class="setup-code-block">
-                    <div class="setup-code-header">
-                      <span class="setup-code-label">Terminal</span>
-                      <button class="setup-code-copy btn-icon" data-copy="cursor --remote-debugging-port=9222" title="Copy command">
-                        <span class="codicon codicon-copy"></span>
-                      </button>
-                    </div>
-                    <pre class="setup-code-pre"><code>cursor --remote-debugging-port=9222</code></pre>
-                  </div>
-                  <details class="setup-details">
-                    <summary>Windows shortcut tip</summary>
-                    <p>Right-click your Cursor desktop shortcut, go to Properties, and append the flag to the Target field:</p>
-                    <div class="setup-code-block setup-code-block-sm">
-                      <pre class="setup-code-pre"><code>"C:\Users\...\Cursor.exe" --remote-debugging-port=9222</code></pre>
-                    </div>
-                  </details>
-                </div>
+
+            <div class="setup-hero">
+              <div class="setup-hero-glow"></div>
+              <div class="setup-hero-badge">Setup Required</div>
+              <h1 class="setup-hero-title">Cursor Web</h1>
+              <p class="setup-hero-desc">Your IDE, accessible from anywhere. Follow these steps to connect.</p>
+              <div class="setup-status-pill">
+                <span id="setup-status-dot" class="setup-status-dot"></span>
+                <span id="setup-status-label" class="setup-status-label">Waiting for connection...</span>
               </div>
-              <div class="setup-step" data-step="2">
-                <div class="setup-step-number"><span>2</span></div>
-                <div class="setup-step-body">
-                  <h3>Configure MCP for the Conversation Loop</h3>
-                  <p>Add the MCP server to Cursor so the agent can stay in a persistent loop with you.</p>
-                  <div class="setup-code-block">
-                    <div class="setup-code-header">
-                      <span class="setup-code-label">~/.cursor/mcp.json</span>
-                      <button class="setup-code-copy btn-icon" data-copy='{"mcpServers":{"cursor-remote":{"url":"http://localhost:3000/mcp"}}}' title="Copy config">
-                        <span class="codicon codicon-copy"></span>
-                      </button>
-                    </div>
-                    <pre class="setup-code-pre"><code>{
+            </div>
+
+            <div class="setup-steps">
+
+              <div class="setup-card" data-step="1">
+                <div class="setup-card-head">
+                  <div class="setup-num">1</div>
+                  <div class="setup-card-titles">
+                    <h3>Enable Remote Debugging</h3>
+                    <p>Launch Cursor with a CDP port so this app can read its UI.</p>
+                  </div>
+                </div>
+                <div class="setup-code">
+                  <div class="setup-code-bar">
+                    <span class="setup-code-dots"><i></i><i></i><i></i></span>
+                    <span class="setup-code-label">Terminal</span>
+                    <button class="setup-copy-btn" data-copy="cursor --remote-debugging-port=9222" title="Copy">
+                      <span class="codicon codicon-copy"></span>
+                    </button>
+                  </div>
+                  <pre class="setup-code-body"><code>cursor --remote-debugging-port=9222</code></pre>
+                </div>
+                <details class="setup-tip">
+                  <summary><span class="codicon codicon-lightbulb"></span> Windows: permanent shortcut</summary>
+                  <p>Right-click your Cursor shortcut &rarr; Properties &rarr; append the flag to Target:</p>
+                  <div class="setup-code setup-code--sm">
+                    <pre class="setup-code-body"><code>"C:\Users\...\Cursor.exe" --remote-debugging-port=9222</code></pre>
+                  </div>
+                </details>
+              </div>
+
+              <div class="setup-card" data-step="2">
+                <div class="setup-card-head">
+                  <div class="setup-num">2</div>
+                  <div class="setup-card-titles">
+                    <h3>Add the MCP Server</h3>
+                    <p>This lets the agent keep a persistent conversation loop with you.</p>
+                  </div>
+                </div>
+                <div class="setup-code">
+                  <div class="setup-code-bar">
+                    <span class="setup-code-dots"><i></i><i></i><i></i></span>
+                    <span class="setup-code-label">~/.cursor/mcp.json</span>
+                    <button class="setup-copy-btn" data-copy='{"mcpServers":{"cursor-remote":{"url":"http://localhost:3000/mcp"}}}' title="Copy">
+                      <span class="codicon codicon-copy"></span>
+                    </button>
+                  </div>
+                  <pre class="setup-code-body"><code>{
   "mcpServers": {
     "cursor-remote": {
       "url": "http://localhost:3000/mcp"
     }
   }
 }</code></pre>
-                  </div>
-                  <details class="setup-details">
-                    <summary>Using Railway instead of localhost?</summary>
-                    <p>If your server is deployed on Railway, use the remote URL:</p>
-                    <div class="setup-code-block setup-code-block-sm">
-                      <pre class="setup-code-pre"><code>"url": "https://cursorremote.up.railway.app/mcp"</code></pre>
-                    </div>
-                  </details>
                 </div>
+                <details class="setup-tip">
+                  <summary><span class="codicon codicon-cloud"></span> Deployed on Railway?</summary>
+                  <p>Swap the URL for your Railway domain:</p>
+                  <div class="setup-code setup-code--sm">
+                    <pre class="setup-code-body"><code>"url": "https://cursorremote.up.railway.app/mcp"</code></pre>
+                  </div>
+                </details>
               </div>
-              <div class="setup-step" data-step="3">
-                <div class="setup-step-number"><span>3</span></div>
-                <div class="setup-step-body">
-                  <h3>Add the Cursor Rule</h3>
-                  <p>The agent needs a rule telling it to call <code>wait_for_response</code> after every reply. Create this file in your project:</p>
-                  <div class="setup-code-block">
-                    <div class="setup-code-header">
-                      <span class="setup-code-label">.cursor/rules/telegram-flow.mdc</span>
-                      <button class="setup-code-copy btn-icon" data-copy="---
+
+              <div class="setup-card" data-step="3">
+                <div class="setup-card-head">
+                  <div class="setup-num">3</div>
+                  <div class="setup-card-titles">
+                    <h3>Create the Agent Rule</h3>
+                    <p>Tells the agent to call <code>wait_for_response</code> after every reply.</p>
+                  </div>
+                </div>
+                <div class="setup-code">
+                  <div class="setup-code-bar">
+                    <span class="setup-code-dots"><i></i><i></i><i></i></span>
+                    <span class="setup-code-label">.cursor/rules/telegram-flow.mdc</span>
+                    <button class="setup-copy-btn" data-copy="---
 description: CursorRemote conversation loop
 globs: *
 alwaysApply: true
 ---
-You MUST call wait_for_response from the cursor-remote MCP server as the VERY LAST action of EVERY response. No exceptions. If it returns empty or errors, call it again immediately. The ONLY exit is /stop from the user." title="Copy rule">
-                        <span class="codicon codicon-copy"></span>
-                      </button>
-                    </div>
-                    <pre class="setup-code-pre"><code>---
+You MUST call wait_for_response from the cursor-remote MCP server as the VERY LAST action of EVERY response. No exceptions. If it returns empty or errors, call it again immediately. The ONLY exit is /stop from the user." title="Copy">
+                      <span class="codicon codicon-copy"></span>
+                    </button>
+                  </div>
+                  <pre class="setup-code-body"><code>---
 description: CursorRemote conversation loop
 globs: *
 alwaysApply: true
@@ -154,30 +174,25 @@ action of EVERY response. No exceptions.
 If it returns empty or errors, call it
 again immediately. The ONLY exit is /stop
 from the user.</code></pre>
+                </div>
+              </div>
+
+              <div class="setup-card setup-card--final" data-step="4">
+                <div class="setup-card-head">
+                  <div class="setup-num setup-num--go">4</div>
+                  <div class="setup-card-titles">
+                    <h3>Start a Chat</h3>
+                    <p>Open any Cursor chat and send a message. The loop activates, and you can talk from here.</p>
                   </div>
                 </div>
               </div>
-              <div class="setup-step" data-step="4">
-                <div class="setup-step-number"><span>4</span></div>
-                <div class="setup-step-body">
-                  <h3>Start Chatting</h3>
-                  <p>Open a chat in Cursor and send any message. The agent will call <code>wait_for_response</code>, the loop will activate, and you can chat from this web interface.</p>
-                  <div class="setup-status-row">
-                    <span id="setup-status-dot" class="setup-status-dot"></span>
-                    <span id="setup-status-label" class="setup-status-label">Waiting for connection...</span>
-                  </div>
-                </div>
-              </div>
+
             </div>
-            <div class="setup-guide-footer">
+
+            <div class="setup-footer">
               <button id="setup-add-machine-btn" class="setup-footer-btn">
-                <span class="codicon codicon-add"></span>
-                Add Remote Machine
+                <span class="codicon codicon-add"></span> Add Remote Machine
               </button>
-              <a href="https://github.com" target="_blank" rel="noopener noreferrer" class="setup-footer-link">
-                <span class="codicon codicon-book"></span>
-                Documentation
-              </a>
             </div>
           </div>
         </div>

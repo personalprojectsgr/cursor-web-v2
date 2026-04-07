@@ -172,6 +172,8 @@ function getExtractionScript() {
             const fileIcon = node.querySelector('.composer-primary-toolcall-icon .show-file-icons');
             const fileIconCls = fileIcon ? (fileIcon.firstElementChild ? fileIcon.firstElementChild.className : '') : '';
 
+            const isStreaming = !!node.querySelector('.make-shine') || !!node.querySelector('.codicon-loading') || node.classList.contains('active');
+
             const codeRender = node.querySelector('.slim-code-render');
             const diffRender = node.querySelector('.slim-diff-render');
             const diffLines = [];
@@ -195,6 +197,27 @@ function getExtractionScript() {
               });
             }
 
+            if (!codeContent && !diffLines.length) {
+              const monacoLines = node.querySelectorAll('.view-line');
+              if (monacoLines.length > 0) {
+                monacoLines.forEach(line => {
+                  codeContent += textOf(line) + '\\n';
+                });
+              }
+            }
+
+            if (!codeContent && !diffLines.length) {
+              const preEl = node.querySelector('pre');
+              const codeEl = node.querySelector('code');
+              if (codeEl) codeContent = textOf(codeEl);
+              else if (preEl) codeContent = textOf(preEl);
+            }
+
+            if (!codeContent && !diffLines.length && isStreaming) {
+              const inner = node.querySelector('.composer-code-block-content') || node.querySelector('.code-block-content');
+              if (inner) codeContent = textOf(inner);
+            }
+
             parts.push({
               type: 'code_block',
               filename: filename,
@@ -203,6 +226,7 @@ function getExtractionScript() {
               code: codeContent.trimEnd(),
               diff: diffLines.length > 0 ? diffLines : null,
               isNew: status.includes('new'),
+              isStreaming: isStreaming,
             });
             return;
           }
@@ -345,8 +369,11 @@ function getExtractionScript() {
         m.parts.forEach(p => {
           const len = (p.text || p.output || p.content || p.description || p.header || '').length;
           const running = p.isRunning ? 'R' : 'D';
+          const streaming = p.isStreaming ? 'S' : '';
           const items = p.items ? p.items.length : 0;
-          contentFp += p.type[0] + running + len + (items ? 'i' + items : '') + '|';
+          const codeLen = p.code ? p.code.length : 0;
+          const diffLen = p.diff ? p.diff.length : 0;
+          contentFp += p.type[0] + running + streaming + len + (codeLen ? 'c' + codeLen : '') + (diffLen ? 'd' + diffLen : '') + (items ? 'i' + items : '') + '|';
         });
       }
     });

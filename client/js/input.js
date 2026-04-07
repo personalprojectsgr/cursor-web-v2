@@ -98,8 +98,18 @@
     var btnStop = document.getElementById('btn-stop');
     var isActive = state && state.agentStatus && state.agentStatus !== 'idle';
 
-    btnSend.classList.toggle('hidden', isActive);
-    btnStop.classList.toggle('hidden', !isActive);
+    var chatKey = CA.getChatKey();
+    var loopState = CA.getLoopStateForChat(chatKey);
+    var isWaiting = loopState === 'active';
+
+    if (!isWaiting && state && state.activeMcp && state.activeMcp.toolName) {
+      isWaiting = /wait.for.response/i.test(state.activeMcp.toolName);
+    }
+
+    var showSend = !isActive || isWaiting;
+
+    btnSend.classList.toggle('hidden', !showSend);
+    btnStop.classList.toggle('hidden', showSend);
   };
 
   CA.renderModeModel = function () {
@@ -331,13 +341,19 @@
   };
 
   CA.initSetupGuide = function () {
-    var copyBtns = document.querySelectorAll('.setup-code-copy');
+    var copyBtns = document.querySelectorAll('.setup-copy-btn');
     copyBtns.forEach(function (btn) {
       btn.addEventListener('click', function () {
         var text = btn.getAttribute('data-copy');
-        if (text && navigator.clipboard) {
+        if (!text) return;
+        if (navigator.clipboard) {
           navigator.clipboard.writeText(text).then(function () {
-            CA.showToast('Copied to clipboard', 'success');
+            var icon = btn.querySelector('.codicon');
+            if (icon) {
+              icon.className = 'codicon codicon-check';
+              setTimeout(function () { icon.className = 'codicon codicon-copy'; }, 1500);
+            }
+            CA.showToast('Copied', 'success');
           });
         }
       });
