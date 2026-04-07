@@ -197,7 +197,11 @@
     if (!sections) return;
 
     if (CA.machines.length === 0 && CA.windows.length === 0) {
-      sections.innerHTML = '<div class="sidebar-empty">Waiting for Cursor IDE...</div>';
+      sections.innerHTML = '<div class="sidebar-empty">' +
+        '<span class="codicon codicon-plug" style="font-size:18px;opacity:0.4;margin-bottom:8px;display:block"></span>' +
+        '<span>No machines connected</span><br>' +
+        '<span style="font-size:11px;color:var(--cursor-text-muted);margin-top:4px;display:block">Launch Cursor with --remote-debugging-port=9222</span>' +
+        '</div>';
       return;
     }
 
@@ -324,6 +328,28 @@
         }
       });
     });
+  };
+
+  CA.initSetupGuide = function () {
+    var copyBtns = document.querySelectorAll('.setup-code-copy');
+    copyBtns.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var text = btn.getAttribute('data-copy');
+        if (text && navigator.clipboard) {
+          navigator.clipboard.writeText(text).then(function () {
+            CA.showToast('Copied to clipboard', 'success');
+          });
+        }
+      });
+    });
+
+    var addMachineBtn = document.getElementById('setup-add-machine-btn');
+    if (addMachineBtn) {
+      addMachineBtn.addEventListener('click', function () {
+        var modal = document.getElementById('machine-modal');
+        if (modal) modal.classList.remove('hidden');
+      });
+    }
   };
 
   CA.initMachineModal = function () {

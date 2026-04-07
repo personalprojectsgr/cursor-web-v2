@@ -129,6 +129,7 @@
     }
 
     CA.initMachineModal();
+    CA.initSetupGuide();
     renderAll();
 
     setInterval(function () {
@@ -213,20 +214,37 @@
 
   function renderMessages() {
     var state = CA.getActiveState();
+    var simpleEmpty = document.getElementById('empty-state-simple');
+    var setupGuide = document.getElementById('setup-guide');
+    var setupDot = document.getElementById('setup-status-dot');
+    var setupLabel = document.getElementById('setup-status-label');
+
     if (!state) {
       CA.renderMessageList([]);
-      var emptyText = document.getElementById('empty-state-text');
-      if (emptyText) {
-        if (!CursorSocket.isConnected()) {
-          emptyText.textContent = 'Connecting to server...';
-        } else if (CA.windows.length === 0) {
-          emptyText.textContent = 'Waiting for Cursor IDE...';
-        } else {
-          emptyText.textContent = 'No messages yet';
-        }
+      var connected = CursorSocket.isConnected();
+      var hasWindows = CA.windows && CA.windows.length > 0;
+
+      if (!connected) {
+        if (simpleEmpty) simpleEmpty.classList.remove('hidden');
+        if (setupGuide) setupGuide.classList.add('hidden');
+        var emptyText = document.getElementById('empty-state-text');
+        if (emptyText) emptyText.textContent = 'Connecting to server...';
+      } else if (!hasWindows) {
+        if (simpleEmpty) simpleEmpty.classList.add('hidden');
+        if (setupGuide) setupGuide.classList.remove('hidden');
+        if (setupDot) setupDot.className = 'setup-status-dot waiting';
+        if (setupLabel) setupLabel.textContent = 'Server connected \u2014 waiting for Cursor IDE...';
+      } else {
+        if (simpleEmpty) simpleEmpty.classList.add('hidden');
+        if (setupGuide) setupGuide.classList.remove('hidden');
+        if (setupDot) setupDot.className = 'setup-status-dot connected';
+        if (setupLabel) setupLabel.textContent = 'Cursor IDE connected \u2014 no messages yet';
       }
       return;
     }
+
+    if (simpleEmpty) simpleEmpty.classList.add('hidden');
+    if (setupGuide) setupGuide.classList.add('hidden');
     CA.renderMessageList(state.messages || []);
     CA.renderLoadingIndicator(state.isLoading || (state.agentStatus === 'generating'));
   }
