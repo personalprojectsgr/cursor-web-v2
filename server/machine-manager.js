@@ -18,6 +18,8 @@ class MachineManager {
     this.discoveryTimers = new Map();
     this.lastFingerprints = new Map();
     this.onStateUpdate = null;
+    this.bridges = new Map();
+    this.bridgeWindows = new Map();
 
     this.ensureLocalhost();
     this.loadConfig();
@@ -357,26 +359,6 @@ class MachineManager {
     }
   }
 
-  buildFullPayload() {
-    const machines = this.listMachines();
-    const windows = [];
-    const states = {};
-
-    for (const [wKey, wInfo] of this.windows) {
-      const state = this.states.get(wKey);
-      windows.push({
-        windowKey: wKey,
-        machineKey: wInfo.machineKey,
-        machineName: this.machines.get(wInfo.machineKey)?.name || wInfo.machineKey,
-        title: state?.chatTitle || state?.documentTitle || wInfo.title || 'Cursor',
-        connected: wInfo.client.connected,
-      });
-      if (state) states[wKey] = state;
-    }
-
-    return { machines, windows, states };
-  }
-
   broadcastFullState() {
     const payload = this.buildFullPayload();
     if (this.io) {
@@ -391,9 +373,9 @@ class MachineManager {
 
   async executeCommand(windowKey, type, params = {}) {
     const wInfo = this.windows.get(windowKey);
-    if (!wInfo || !wInfo.client.connected) {
-      return { ok: false, error: 'Window not connected' };
-    }
+    if (!wInfo) return { ok: false, error: 'Window not found' };
+    if (wInfo.isBridge) return { ok: false, error: 'Bridge window - route via bridge socket' };
+    if (!wInfo.client || !wInfo.client.connected) return { ok: false, error: 'Window not connected' };
 
     const client = wInfo.client;
 
@@ -649,6 +631,104 @@ class MachineManager {
     } catch (e) {
       return { ok: false, error: e.message };
     }
+  }
+
+  registerBridge(socketId, machineKey, machineName) {
+    this.bridges.set(socketId, { machineKey, machineName, connectedAt: Date.now() });
+    if (!this.machines.has(machineKey)) {
+      this.machines.set(machineKey, {
+        name: machineName,
+        host: machineKey.split(':')[0],
+        port: parseInt(machineKey.split(':')[1] || '9222', 10),
+        addedAt: Date.now(),
+      });
+    } else {
+      this.machines.get(machineKey).name = machineName;
+    }
+    log.info('Bridge registered', { socketId: socketId.substring(0, 10), machineKey, name: machineName });
+  }
+
+  removeBridge(socketId) {
+    const bridge = this.bridges.get(socketId);
+    if (!bridge) return;
+    this.bridges.delete(socketId);
+
+    const keysToRemove = [];
+    for (const [wKey, bSocketId] of this.bridgeWindows) {
+      if (bSocketId === socketId) {
+        keysToRemove.push(wKey);
+      }
+    }
+    for (const wKey of keysToRemove) {
+      this.bridgeWindows.delete(wKey);
+      this.windows.delete(wKey);
+      this.states.delete(wKey);
+      this.lastFingerprints.delete(wKey);
+    }
+
+    log.info('Bridge removed', { socketId: socketId.substring(0, 10), windowsCleared: keysToRemove.length });
+    if (keysToRemove.length > 0) this.broadcastFullState();
+  }
+
+  handleBridgeState(socketId, payload) {
+    const bridge = this.bridges.get(socketId);
+    if (!bridge) return;
+
+    if (payload.windows) {
+      const incomingKeys = new Set(payload.windows.map(w => w.windowKey));
+
+      for (const [wKey, bSocketId] of this.bridgeWindows) {
+        if (bSocketId === socketId && !incomingKeys.has(wKey)) {
+          this.bridgeWindows.delete(wKey);
+          this.windows.delete(wKey);
+          this.states.delete(wKey);
+          this.lastFingerprints.delete(wKey);
+        }
+      }
+
+      for (const win of payload.windows) {
+        this.bridgeWindows.set(win.windowKey, socketId);
+        this.windows.set(win.windowKey, {
+          machineKey: bridge.machineKey,
+          targetId: win.windowKey.split('|').pop(),
+          client: { connected: win.connected },
+          title: win.title,
+          isBridge: true,
+        });
+      }
+    }
+
+    if (payload.states) {
+      for (const [wKey, state] of Object.entries(payload.states)) {
+        this.states.set(wKey, state);
+      }
+    }
+
+    this.broadcastFullState();
+  }
+
+  getBridgeForWindow(windowKey) {
+    return this.bridgeWindows.get(windowKey) || null;
+  }
+
+  buildFullPayload() {
+    const machines = this.listMachines();
+    const windows = [];
+    const states = {};
+
+    for (const [wKey, wInfo] of this.windows) {
+      const state = this.states.get(wKey);
+      windows.push({
+        windowKey: wKey,
+        machineKey: wInfo.machineKey,
+        machineName: this.machines.get(wInfo.machineKey)?.name || wInfo.machineKey,
+        title: state?.chatTitle || state?.documentTitle || wInfo.title || 'Cursor',
+        connected: wInfo.isBridge ? wInfo.client.connected : (wInfo.client && wInfo.client.connected),
+      });
+      if (state) states[wKey] = state;
+    }
+
+    return { machines, windows, states };
   }
 }
 

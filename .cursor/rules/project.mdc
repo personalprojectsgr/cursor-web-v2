@@ -1,0 +1,89 @@
+---
+description: Cursor Web v2 project architecture, conventions, and deployment
+alwaysApply: true
+---
+
+# Cursor Web v2
+
+## What This Project Is
+
+A web-based remote interface for Cursor IDE's sidebar chat. It clones the exact look and functionality of Cursor's chat panel and makes it accessible from any browser (desktop or mobile). It uses Chrome DevTools Protocol (CDP) to extract UI state directly from Cursor -- no extension needed.
+
+## Architecture
+
+```
+Cursor IDE (localhost:9222 CDP)
+        ↓ CDP WebSocket
+   Local Node Server (port 3000)
+     ├── DOM Extraction (server/dom-extractor.js + server/machine-manager.js)
+     ├── MCP Handler (server/mcp-handler.js) ← agent calls wait_for_response here
+     ├── Express API + Static Files (server/index.js)
+     └── Socket.IO → Web Client (client/)
+```
+
+### Key Components
+
+- **server/cdp-client.js** - Low-level CDP WebSocket communication
+- **server/dom-extractor.js** - JavaScript injected into Cursor IDE via CDP to extract chat state
+- **server/machine-manager.js** - Manages CDP connections to multiple machines/windows, polls for state changes
+- **server/mcp-handler.js** - Model Context Protocol server with `wait_for_response` tool for agent looping
+- **server/index.js** - Express server, Socket.IO, API routes, wires everything together
+- **server/logger.js** - Structured logging
+- **client/** - Static web client (vanilla JS, no build step)
+
+### Data Flow
+
+1. `machine-manager` connects to CDP targets on registered machines
+2. `dom-extractor` script is evaluated in Cursor IDE to extract messages, status, mode/model
+3. Extracted state is broadcast to all connected web clients via Socket.IO
+4. User types in web client → Socket.IO → server → MCP `wait_for_response` resolves → agent continues
+
+### MCP Session Model
+
+Sessions are per-chat, identified by `chatKey = machineKey|windowKey|tabIndex`.
+States: unbound → bound → waiting → (delivered) → bound → waiting → ...
+The agent calls `wait_for_response` in a loop. Each call blocks for up to 240s (keepalive), then returns empty string so the agent re-calls immediately.
+
+## Important: Railway vs Local
+
+**Railway deployment handles MCP only.** It cannot connect to your local CDP port.
+
+For the full experience (chat rendering + MCP loop):
+- Run `node server/index.js` locally with Cursor started with `--remote-debugging-port=9222`
+- The MCP URL in `~/.cursor/mcp.json` can point to either localhost or Railway
+
+Railway URL: `https://cursorremote.up.railway.app`
+MCP endpoint: `https://cursorremote.up.railway.app/mcp`
+
+## Code Conventions
+
+- Vanilla JavaScript (ES5-compatible in client for maximum compatibility)
+- No build step, no bundler, no framework
+- Client uses IIFEs with `window.CursorApp` namespace
+- Server uses CommonJS (`require`/`module.exports`)
+- No comments in code
+- CSS uses CSS custom properties defined in `cursor-theme.css`
+- Codicon icons via CDN (`@vscode/codicons`)
+- Prism.js for syntax highlighting via CDN
+
+## File Structure
+
+```
+client/
+  css/cursor-theme.css   - CSS variables (colors, fonts, sizes)
+  css/components.css     - All component styles
+  js/state.js            - Global state (CursorApp namespace)
+  js/socket.js           - Socket.IO wrapper (CursorSocket namespace)
+  js/messages.js         - Message rendering (markdown, code blocks, tool calls, diffs)
+  js/input.js            - Input handling, image attach, sidebar, machine modal
+  js/sheets.js           - Mode/model selection sheets (dynamic from CDP)
+  js/app.js              - Main app init, event wiring, render loop
+  index.html             - Single page
+server/
+  index.js               - Express + Socket.IO + API routes
+  cdp-client.js          - CDP WebSocket client
+  dom-extractor.js       - DOM extraction script (injected into Cursor)
+  machine-manager.js     - Multi-machine CDP management
+  mcp-handler.js         - MCP server (wait_for_response)
+  logger.js              - Structured logger
+```

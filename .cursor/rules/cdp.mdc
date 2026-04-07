@@ -1,0 +1,67 @@
+---
+description: Chrome DevTools Protocol usage and DOM extraction patterns
+alwaysApply: false
+globs:
+  - "server/cdp-client.js"
+  - "server/dom-extractor.js"
+  - "server/machine-manager.js"
+---
+
+# CDP (Chrome DevTools Protocol)
+
+## Starting Cursor with CDP
+
+```powershell
+# Start Cursor IDE with remote debugging enabled
+cursor --remote-debugging-port=9222
+```
+
+This exposes CDP on `localhost:9222`. The server discovers available targets via `http://localhost:9222/json`.
+
+## CDP Client (cdp-client.js)
+
+Lightweight WebSocket-based CDP client. Key methods:
+
+- `evaluateJSON(expression)` - Evaluate JS in Cursor's main frame, auto-detects async and sets `awaitPromise` accordingly
+- `evaluate(expression)` - Raw evaluate, returns CDP result object
+- `send(method, params)` - Send any CDP command
+
+## DOM Extraction (dom-extractor.js)
+
+A large JavaScript string that gets evaluated inside Cursor IDE via CDP. It extracts:
+
+- Chat messages (user and assistant)
+- Message parts: text, code blocks (with diffs), tool calls, todo lists
+- Agent status (running, stopped, tool name)
+- Current mode and model
+- Input editor content and placeholder text
+
+The extraction script finds elements by CSS selectors matching Cursor's internal DOM structure. Key selectors:
+
+- `.composer-content` - Main chat message container
+- `.agentic-composer-tool-call-group` - Tool call groups
+- `.slim-code-render`, `.slim-diff-render` - Code blocks and diffs
+- `.composer-unified-dropdown` - Mode selector
+- `.composer-unified-dropdown-model` - Model selector
+
+## Machine Manager (machine-manager.js)
+
+Manages connections to one or more machines running Cursor with CDP:
+
+- Discovers CDP targets at configurable intervals
+- Connects to page-type targets
+- Runs `dom-extractor.js` on each target at polling intervals
+- Broadcasts extracted state to web clients via Socket.IO
+- Handles target disconnect/reconnect gracefully
+
+## Command Execution
+
+The server can send commands back to Cursor IDE:
+
+- `send_message` - Types text into Cursor's input and submits
+- `stop_generation` - Clicks the stop button
+- `set_mode` - Opens mode dropdown and clicks the target mode
+- `set_model` - Opens model dropdown and clicks the target model
+- `get_mode_options` / `get_model_options` - Extracts available options from dropdowns
+
+All commands use JavaScript `.click()` injection (not mouse events) for reliability.

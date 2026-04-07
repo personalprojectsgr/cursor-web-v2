@@ -102,6 +102,7 @@ app.get('/health', (req, res) => {
     uptime: process.uptime(),
     machines: machineManager.listMachines(),
     windows: machineManager.windows.size,
+    bridges: machineManager.bridges.size,
     mcp: { waiting: mcpWaiting, loopActive: mcpLoopActive },
   });
 });
@@ -119,8 +120,14 @@ app.get('/api/mode-options', async (req, res) => {
   const wKey = req.query.window || firstConnectedWindow();
   if (!wKey) return res.json({ ok: false, error: 'No windows connected', modes: [] });
   try {
-    const result = await machineManager.executeCommand(wKey, 'get_mode_options', {});
-    res.json(result);
+    const bridgeSocketId = machineManager.getBridgeForWindow(wKey);
+    if (bridgeSocketId) {
+      const result = await sendBridgeCommand(bridgeSocketId, wKey, 'get_mode_options', {}, 'api_mode');
+      res.json(result);
+    } else {
+      const result = await machineManager.executeCommand(wKey, 'get_mode_options', {});
+      res.json(result);
+    }
   } catch (e) {
     res.json({ ok: false, error: e.message, modes: [] });
   }
@@ -130,8 +137,14 @@ app.get('/api/model-options', async (req, res) => {
   const wKey = req.query.window || firstConnectedWindow();
   if (!wKey) return res.json({ ok: false, error: 'No windows connected', models: [] });
   try {
-    const result = await machineManager.executeCommand(wKey, 'get_model_options', {});
-    res.json(result);
+    const bridgeSocketId = machineManager.getBridgeForWindow(wKey);
+    if (bridgeSocketId) {
+      const result = await sendBridgeCommand(bridgeSocketId, wKey, 'get_model_options', {}, 'api_model');
+      res.json(result);
+    } else {
+      const result = await machineManager.executeCommand(wKey, 'get_model_options', {});
+      res.json(result);
+    }
   } catch (e) {
     res.json({ ok: false, error: e.message, models: [] });
   }
@@ -153,6 +166,34 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
   const role = socket.data.role;
   log.info('Socket connected', { socketId: socket.id, role });
+
+  if (role === 'bridge') {
+    socket.join('bridges');
+
+    socket.on('bridge:hello', (info) => {
+      socket.data.machineKey = info.machineKey;
+      socket.data.machineName = info.machineName;
+      log.info('Bridge registered', { machineKey: info.machineKey, name: info.machineName });
+      machineManager.registerBridge(socket.id, info.machineKey, info.machineName);
+    });
+
+    socket.on('bridge:state', (payload) => {
+      machineManager.handleBridgeState(socket.id, payload);
+    });
+
+    socket.on('bridge:command_result', (result) => {
+      const pending = bridgePendingCommands.get(result.commandId);
+      if (pending) {
+        bridgePendingCommands.delete(result.commandId);
+        pending.resolve(result);
+      }
+    });
+
+    socket.on('disconnect', () => {
+      log.info('Bridge disconnected', { socketId: socket.id, machineKey: socket.data.machineKey });
+      machineManager.removeBridge(socket.id);
+    });
+  }
 
   if (role === 'phone' || role === undefined) {
     socket.join('phones');
@@ -178,17 +219,19 @@ io.on('connection', (socket) => {
       }
 
       const cmdParams = { ...payload, ...(payload.params || {}) };
-      if (targetWindowKey) {
-        const cmdResult = await machineManager.executeCommand(targetWindowKey, type, cmdParams);
-        socket.emit('command:result', { commandId, ...cmdResult });
-      } else {
-        const firstWindow = machineManager.windows.keys().next().value;
-        if (firstWindow) {
-          const cmdResult = await machineManager.executeCommand(firstWindow, type, cmdParams);
-          socket.emit('command:result', { commandId, ...cmdResult });
+      const targetWKey = targetWindowKey || firstConnectedWindow();
+
+      if (targetWKey) {
+        const bridgeSocketId = machineManager.getBridgeForWindow(targetWKey);
+        if (bridgeSocketId) {
+          const bridgeResult = await sendBridgeCommand(bridgeSocketId, targetWKey, type, cmdParams, commandId);
+          socket.emit('command:result', { commandId, ...bridgeResult });
         } else {
-          socket.emit('command:result', { commandId, ok: false, error: 'No windows connected' });
+          const cmdResult = await machineManager.executeCommand(targetWKey, type, cmdParams);
+          socket.emit('command:result', { commandId, ...cmdResult });
         }
+      } else {
+        socket.emit('command:result', { commandId, ok: false, error: 'No windows connected' });
       }
     });
 
@@ -208,6 +251,41 @@ io.on('connection', (socket) => {
     log.error('Socket error', { socketId: socket.id, error: err.message });
   });
 });
+
+const bridgePendingCommands = new Map();
+let bridgeCmdIdCounter = 0;
+
+function sendBridgeCommand(bridgeSocketId, windowKey, type, params, clientCommandId) {
+  return new Promise((resolve) => {
+    const cmdId = 'bc_' + (++bridgeCmdIdCounter);
+    const timeout = setTimeout(() => {
+      bridgePendingCommands.delete(cmdId);
+      resolve({ ok: false, error: 'Bridge command timeout' });
+    }, 20000);
+
+    bridgePendingCommands.set(cmdId, {
+      resolve: (result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      },
+    });
+
+    const bridgeSocket = io.sockets.sockets.get(bridgeSocketId);
+    if (!bridgeSocket) {
+      clearTimeout(timeout);
+      bridgePendingCommands.delete(cmdId);
+      resolve({ ok: false, error: 'Bridge socket gone' });
+      return;
+    }
+
+    bridgeSocket.emit('bridge:command', {
+      commandId: cmdId,
+      windowKey,
+      type,
+      params,
+    });
+  });
+}
 
 machineManager.startAllDiscovery();
 

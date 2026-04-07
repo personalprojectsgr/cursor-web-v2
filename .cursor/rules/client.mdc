@@ -1,0 +1,60 @@
+---
+description: Client-side code conventions and rendering patterns
+alwaysApply: false
+globs:
+  - "client/**"
+---
+
+# Client Code
+
+## Conventions
+
+- Vanilla JavaScript, ES5-compatible (no arrow functions, no let/const, no template literals in client code)
+- All client JS uses IIFE pattern with namespaces on `window`
+- `window.CursorApp` (aliased `CA`) - Global state and helper functions
+- `window.CursorSocket` (aliased `CS`) - Socket.IO communication
+- No build step, no transpilation, loaded via `<script>` tags in order
+
+## State Management (state.js)
+
+`CursorApp` holds all mutable state:
+- `activeMachine`, `activeWindow`, `activeTab` - Current selection
+- `machines` - Map of registered machines and their CDP state
+- `pendingImages` - Base64 image data queued for sending
+- `mcpPerSession` - MCP session state per chatKey
+
+## Message Rendering (messages.js)
+
+Messages are rendered incrementally:
+1. `renderMessage(msg)` - Creates full DOM for a new message
+2. `updateMessage(msg, existingEl)` - Patches existing DOM for streaming updates
+
+Message parts: `text`, `code_block` (with optional `diff`), `tool_call`, `todo_list`
+
+Code blocks detect changes by comparing diff count, code length, and filename to trigger rebuilds during streaming.
+
+Markdown is rendered manually (bold, italic, code, links, headers, lists) without a library.
+
+## Input Handling (input.js)
+
+- `contenteditable` div for the input editor
+- Image attachment via file picker, paste (Ctrl+V), and drag-drop
+- Images stored as base64 Data URLs in `CA.pendingImages`
+- Preview strip shown above input with remove buttons
+
+## Sheets (sheets.js)
+
+Bottom sheets for mode and model selection. Options fetched dynamically from CDP via API on each open (not cached).
+
+## Styling
+
+- `cursor-theme.css` - CSS custom properties matching Cursor IDE's dark theme
+- `components.css` - All component styles
+- Desktop: centered content with max-width, sidebar visible
+- Mobile: full-width, bottom tab bar instead of sidebar
+
+## Socket Events
+
+- `state:update` - Receives extracted Cursor IDE state
+- `phone:command` - Sends commands to server (send_message, stop, set_mode, etc.)
+- `mcp:state` - Receives MCP session state for loop indicators

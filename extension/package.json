@@ -1,0 +1,29 @@
+{
+  "name": "cursor-web-relay",
+  "displayName": "Cursor Web Relay",
+  "description": "Auto-starts the Cursor Web relay agent to bridge local CDP to the remote server",
+  "version": "0.1.0",
+  "publisher": "cursor-web",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cursorWebRelay.start",
+        "title": "Cursor Web Relay: Start"
+      },
+      {
+        "command": "cursorWebRelay.stop",
+        "title": "Cursor Web Relay: Stop"
+      },
+      {
+        "command": "cursorWebRelay.restart",
+        "title": "Cursor Web Relay: Restart"
+      }
+    ]
+  }
+}

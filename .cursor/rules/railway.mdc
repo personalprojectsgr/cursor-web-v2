@@ -1,0 +1,105 @@
+---
+description: Railway CLI deployment commands and workflow
+alwaysApply: false
+globs:
+  - "server/**"
+  - "package.json"
+  - "Dockerfile"
+  - "railway*"
+---
+
+# Railway Deployment
+
+## Project Details
+
+- Railway project: `cursor-web-v2`
+- Service: `cursor-web-v2`
+- Domain: `cursorremote.up.railway.app`
+- GitHub repo linked for auto-deploy on push to `main`
+
+## Railway CLI
+
+### Installation
+
+Railway CLI is invoked via npx (no global install needed):
+
+```
+npx @railway/cli@latest <command>
+```
+
+### Common Commands
+
+```powershell
+# Check status
+npx @railway/cli@latest status
+
+# View deployment logs (live tail)
+npx @railway/cli@latest logs
+
+# List all services
+npx @railway/cli@latest service list
+
+# Link local project to Railway (interactive)
+npx @railway/cli@latest link
+
+# Manual deploy (upload local code)
+npx @railway/cli@latest up
+
+# Open Railway dashboard
+npx @railway/cli@latest open
+
+# View environment variables
+npx @railway/cli@latest variables
+
+# Set environment variable
+npx @railway/cli@latest variables set KEY=VALUE
+
+# View deployment domain
+npx @railway/cli@latest domain
+```
+
+### Deployment Methods
+
+1. **Auto-deploy (preferred)**: Push to GitHub → Railway auto-deploys
+   ```
+   git add -A && git commit -m "message" && git push
+   ```
+
+2. **Manual deploy**: Upload current directory
+   ```
+   npx @railway/cli@latest up
+   ```
+
+### Important Notes
+
+- Railway uses `npm start` which runs `node server/index.js`
+- The PORT env var is set by Railway (usually 8080), the server reads `process.env.PORT || 3000`
+- Railway's localhost is NOT your local machine -- CDP connections to `localhost:9222` won't work on Railway
+- Health check endpoint: `GET /health`
+- Debug endpoint: `GET /debug/sessions` (shows MCP session state)
+
+### Troubleshooting
+
+- **"Application not found"**: Railway is mid-redeploy. Wait 30-60 seconds and retry.
+- **Logs show no CDP connections**: Expected on Railway. CDP only works when server runs locally.
+- **MCP sessions stuck in "unbound"**: The agent hasn't called `wait_for_response` yet, or sessions expired.
+- **Deploy not picking up changes**: Ensure `.gitignore` excludes `node_modules`, then push to trigger auto-deploy.
+
+### Testing Railway Deployment
+
+```powershell
+# Health check
+Invoke-RestMethod -Uri https://cursorremote.up.railway.app/health
+
+# MCP session debug info
+Invoke-RestMethod -Uri https://cursorremote.up.railway.app/debug/sessions
+
+# Verify MCP endpoint responds
+Invoke-WebRequest -Uri https://cursorremote.up.railway.app/mcp -Method POST -ContentType "application/json" -Body '{}'
+```
+
+### PowerShell Gotchas
+
+- Use `Invoke-RestMethod` or `Invoke-WebRequest` instead of `curl` (PowerShell aliases `curl` to `Invoke-WebRequest` which has different syntax)
+- Pipe characters `|` in URL parameters need quoting or encoding
+- Use Node.js scripts for complex API testing instead of PowerShell one-liners

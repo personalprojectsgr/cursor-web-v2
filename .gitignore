@@ -2,6 +2,8 @@ node_modules/
 .env
 .vercel
 .playwright-mcp/
-.cursor/
+.cursor/*
+!.cursor/rules/
 machines.json
 *.png
+*.vsix

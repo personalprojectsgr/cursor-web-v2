@@ -1,0 +1,78 @@
+---
+description: MCP (Model Context Protocol) implementation details and wait_for_response loop
+alwaysApply: false
+globs:
+  - "server/mcp-handler.js"
+  - "server/index.js"
+---
+
+# MCP Implementation
+
+## Overview
+
+The server exposes a single MCP endpoint at `/mcp` that handles HTTP/SSE transport using `@modelcontextprotocol/sdk` v1.28+.
+
+## Tool: wait_for_response
+
+The only MCP tool exposed. It blocks until the user sends a message from the web client, then returns that message as the tool result.
+
+### Loop Mechanism
+
+1. Agent calls `wait_for_response` → server blocks for up to 240 seconds
+2. If user sends a message → resolve immediately with message content (text + optional images)
+3. If 240s expires with no message → return empty string (keepalive)
+4. Agent sees empty string → immediately calls `wait_for_response` again
+5. This creates an "infinite" loop that only stops when the user sends `/stop` or the agent is manually stopped
+
+### Session Lifecycle
+
+```
+MCP INIT (POST /mcp) → session created (unbound)
+  ↓
+wait_for_response called → session becomes "waiting"
+  ↓
+User sends message via web client → message routed to session → resolved
+  ↓
+Agent processes message, calls wait_for_response again → "waiting"
+  ↓
+... repeat ...
+```
+
+### Session Binding (chatKey)
+
+Sessions auto-bind to a specific chat: `chatKey = machineKey|windowKey|tabIndex`
+
+- `machineKey`: The registered machine identifier (from Socket.IO)
+- `windowKey`: CDP target/window identifier
+- `tabIndex`: The chat tab index within Cursor IDE (0, 1, 2, etc.)
+
+Binding happens on first `resolvePendingWait` call -- the session that's waiting gets bound to the chatKey of the message sender.
+
+### MCP Config Location
+
+`~/.cursor/mcp.json` must include:
+
+```json
+{
+  "mcpServers": {
+    "cursor-remote": {
+      "url": "https://cursorremote.up.railway.app/mcp"
+    }
+  }
+}
+```
+
+For local development, change to `http://localhost:3000/mcp`.
+
+### Message Routing (resolvePendingWait)
+
+When the web client sends a message:
+1. Socket.IO emits `phone:command` with `type: "send_message"`
+2. Server calls `mcp.resolvePendingWait(text, images, msgId, targetChatKey)`
+3. `resolvePendingWait` finds a waiting session (preferring one bound to `targetChatKey`)
+4. Resolves the pending promise → agent receives the message
+5. If no waiting session found, message is queued for up to 10 seconds
+
+### Heartbeat
+
+Every 60 seconds, the MCP handler logs all active sessions with their state, chatKey, wait count, and idle time. Sessions idle for 30+ minutes with no waiter are cleaned up.
