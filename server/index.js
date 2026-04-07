@@ -287,6 +287,10 @@ function sendBridgeCommand(bridgeSocketId, windowKey, type, params, clientComman
   });
 }
 
+machineManager._onSessionRebind = (oldWindowKey, newWindowKey) => {
+  mcp.rebindStaleSessions(oldWindowKey, newWindowKey);
+};
+
 machineManager.startAllDiscovery();
 
 server.listen(PORT, () => {

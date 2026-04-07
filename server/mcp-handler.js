@@ -9,9 +9,9 @@ const log = createLogger('mcp');
 const WAIT_TIMEOUT_MS = 240_000;
 const ROUTE_POLL_MS = 200;
 const ROUTE_WAIT_MAX_MS = 30_000;
-const REAP_IDLE_MS = 600_000;
-const CLEANUP_INTERVAL_MS = 60_000;
-const HEARTBEAT_INTERVAL_MS = 60_000;
+const REAP_IDLE_MS = 86_400_000;
+const CLEANUP_INTERVAL_MS = 120_000;
+const HEARTBEAT_INTERVAL_MS = 120_000;
 const MAX_DELIVERED = 200;
 
 class Session {
@@ -285,6 +285,25 @@ class SessionManager {
     if (best) this.bind(best, chatKey, 'auto-bind-from-state');
   }
 
+  rebindStale(oldWindowKey, newWindowKey) {
+    let count = 0;
+    for (const [, s] of this.sessions) {
+      if (!s.isAlive || !s.chatKey) continue;
+      const parts = s.chatKey.split('|');
+      const sessionWindowKey = parts.slice(0, 2).join('|');
+      const tabIndex = parts[2] || '0';
+      if (sessionWindowKey === oldWindowKey) {
+        const newChatKey = newWindowKey + '|' + tabIndex;
+        log.info('SESSION rebind (window changed)', { sid: s.shortId, from: s.chatKey, to: newChatKey });
+        s.chatKey = newChatKey;
+        s.touch();
+        count++;
+      }
+    }
+    if (count > 0) this._fire();
+    return count;
+  }
+
   _findLooped(chatKey) {
     let best = null;
     let bestTime = -1;
@@ -348,9 +367,11 @@ class SessionManager {
 
   _doCleanup() {
     const toDelete = [];
+    const GRACE_MS = 300_000;
     for (const [sid, s] of this.sessions) {
       if (s.state === 'dead') { toDelete.push(sid); continue; }
       if (s.hasWaiter || s.isLooping) continue;
+      if (s.waiterCount > 0 && s.idleSinceMs < GRACE_MS) continue;
       if (s.idleSinceMs > REAP_IDLE_MS) {
         log.info('SESSION reap', { sid: s.shortId, idleMs: s.idleSinceMs });
         s.state = 'dead';
@@ -483,4 +504,5 @@ module.exports = {
   getSessionInfo: () => manager.getSessionInfo(),
   getDebugDump: () => manager.getDebugDump(),
   getMessageStatus: (id) => manager.getMessageStatus(id),
+  rebindStaleSessions: (oldWindowKey, newWindowKey) => manager.rebindStale(oldWindowKey, newWindowKey),
 };

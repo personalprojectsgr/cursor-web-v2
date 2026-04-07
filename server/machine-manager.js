@@ -18,6 +18,7 @@ class MachineManager {
     this.discoveryTimers = new Map();
     this.lastFingerprints = new Map();
     this.onStateUpdate = null;
+    this._onSessionRebind = null;
     this.bridges = new Map();
     this.bridgeWindows = new Map();
 
@@ -164,6 +165,10 @@ class MachineManager {
     const discover = async () => {
       const machine = this.machines.get(machineKey);
       if (!machine) return;
+
+      const hasBridge = Array.from(this.bridges.values()).some(b => b.machineKey === machineKey);
+      if (hasBridge) return;
+
       try {
         const targets = await discoverTargets(machine.host, machine.port);
         for (const target of targets) {
@@ -174,6 +179,7 @@ class MachineManager {
         }
         const currentTargetIds = new Set(targets.map(t => t.id));
         for (const [wKey, wInfo] of this.windows) {
+          if (wInfo.isBridge) continue;
           if (wInfo.machineKey === machineKey && !currentTargetIds.has(wInfo.targetId)) {
             log.info('Window disappeared', { window: wKey });
             this.safeDisconnect(wInfo);
@@ -185,10 +191,9 @@ class MachineManager {
           }
         }
       } catch (e) {
-        const connectedForMachine = Array.from(this.windows.values()).filter(w => w.machineKey === machineKey);
-        if (connectedForMachine.length > 0) {
-          connectedForMachine.forEach(w => {
-            const wKey = `${machineKey}|${w.targetId}`;
+        const directWindows = Array.from(this.windows.entries()).filter(([, w]) => w.machineKey === machineKey && !w.isBridge);
+        if (directWindows.length > 0) {
+          directWindows.forEach(([wKey, w]) => {
             this.safeDisconnect(w);
             this.windows.delete(wKey);
             this.states.delete(wKey);
@@ -249,7 +254,8 @@ class MachineManager {
     if (this.pollingTimers.has(windowKey)) return;
 
     const wInfo = this.windows.get(windowKey);
-    if (!wInfo || !wInfo.client.connected) return;
+    if (!wInfo || wInfo.isBridge) return;
+    if (!wInfo.client || !wInfo.client.connected) return;
 
     try {
       await wInfo.client.send('DOM.enable');
@@ -670,6 +676,7 @@ class MachineManager {
       this.windows.delete(wKey);
       this.states.delete(wKey);
       this.lastFingerprints.delete(wKey);
+      this.stopPollingFor(wKey);
     }
 
     log.info('Bridge removed', { socketId: socketId.substring(0, 10), windowsCleared: keysToRemove.length });
@@ -680,11 +687,14 @@ class MachineManager {
     const bridge = this.bridges.get(socketId);
     if (!bridge) return;
 
+    const staleKeys = [];
+
     if (payload.windows) {
       const incomingKeys = new Set(payload.windows.map(w => w.windowKey));
 
       for (const [wKey, bSocketId] of this.bridgeWindows) {
         if (bSocketId === socketId && !incomingKeys.has(wKey)) {
+          staleKeys.push(wKey);
           this.bridgeWindows.delete(wKey);
           this.windows.delete(wKey);
           this.states.delete(wKey);
@@ -701,6 +711,14 @@ class MachineManager {
           title: win.title,
           isBridge: true,
         });
+      }
+
+      if (staleKeys.length > 0 && payload.windows.length > 0 && this._onSessionRebind) {
+        for (const staleKey of staleKeys) {
+          for (const win of payload.windows) {
+            this._onSessionRebind(staleKey, win.windowKey);
+          }
+        }
       }
     }
 
