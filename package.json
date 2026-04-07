@@ -1,0 +1,15 @@
+{
+  "name": "cursor-web-v2",
+  "version": "2.0.0",
+  "private": true,
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.28.0",
+    "express": "^4.21.0",
+    "socket.io": "^4.8.1",
+    "zod": "^4.3.6"
+  }
+}
