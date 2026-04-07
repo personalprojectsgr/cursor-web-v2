@@ -26,6 +26,12 @@ class MachineManager {
     this.watchConfig();
   }
 
+  safeDisconnect(wInfo) {
+    if (wInfo && wInfo.client && typeof wInfo.client.disconnect === 'function') {
+      wInfo.client.disconnect();
+    }
+  }
+
   ensureLocalhost() {
     if (!this.machines.has('localhost:9222')) {
       this.machines.set('localhost:9222', {
@@ -109,7 +115,7 @@ class MachineManager {
     this.stopDiscoveryFor(key);
     for (const [wKey, wInfo] of this.windows) {
       if (wInfo.machineKey === key) {
-        wInfo.client.disconnect();
+        this.safeDisconnect(wInfo);
         this.windows.delete(wKey);
         this.states.delete(wKey);
         this.stopPollingFor(wKey);
@@ -148,7 +154,7 @@ class MachineManager {
     this.discoveryTimers.clear();
     for (const timer of this.pollingTimers.values()) clearInterval(timer);
     this.pollingTimers.clear();
-    for (const wInfo of this.windows.values()) wInfo.client.disconnect();
+    for (const wInfo of this.windows.values()) this.safeDisconnect(wInfo);
     this.windows.clear();
   }
 
@@ -170,7 +176,7 @@ class MachineManager {
         for (const [wKey, wInfo] of this.windows) {
           if (wInfo.machineKey === machineKey && !currentTargetIds.has(wInfo.targetId)) {
             log.info('Window disappeared', { window: wKey });
-            wInfo.client.disconnect();
+            this.safeDisconnect(wInfo);
             this.windows.delete(wKey);
             this.states.delete(wKey);
             this.lastFingerprints.delete(wKey);
@@ -183,7 +189,7 @@ class MachineManager {
         if (connectedForMachine.length > 0) {
           connectedForMachine.forEach(w => {
             const wKey = `${machineKey}|${w.targetId}`;
-            w.client.disconnect();
+            this.safeDisconnect(w);
             this.windows.delete(wKey);
             this.states.delete(wKey);
             this.lastFingerprints.delete(wKey);
