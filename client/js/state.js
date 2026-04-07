@@ -1,235 +1,172 @@
 (function () {
   'use strict';
 
-  var defaultState = {
-    connected: false,
-    agentStatus: 'idle',
-    messages: [],
-    pendingApprovals: [],
-    inputAvailable: false,
-    chatTabs: [],
-    mode: { current: 'agent' },
-    model: { current: 'Auto' },
-  };
-
   window.CursorApp = {
-    state: Object.assign({}, defaultState),
-    defaultState: defaultState,
+    machines: [],
+    windows: [],
     windowStates: {},
-    connectedWindows: [],
     activeWindowKey: null,
-    userScrolledUp: false,
-    autoScrollJob: 0,
-    pendingImages: [],
+    activeMachineKey: null,
     mcpWaiting: false,
     mcpLoopActive: false,
     mcpPerSession: {},
-    lastStateUpdateTime: 0,
+    pendingImages: [],
+    lastUpdateTime: 0,
+    userScrolledUp: false,
+    autoScrollJob: 0,
     reconnecting: false,
-    optimisticMessages: [],
-  };
 
-  var CA = window.CursorApp;
-
-  CA.escapeHtml = function (str) {
-    var d = document.createElement('div');
-    d.textContent = str;
-    return d.innerHTML;
-  };
-
-  CA.sanitizeHtml = function (html) {
-    var tmp = document.createElement('div');
-    tmp.innerHTML = html;
-    tmp.querySelectorAll('script, iframe, object, embed, form').forEach(function (el) { el.remove(); });
-    tmp.querySelectorAll('*').forEach(function (el) {
-      Array.from(el.attributes).forEach(function (attr) {
-        if (attr.name.startsWith('on') || attr.name === 'srcdoc') el.removeAttribute(attr.name);
-      });
-      if (el.tagName === 'A') {
-        el.setAttribute('target', '_blank');
-        el.setAttribute('rel', 'noopener noreferrer');
+    getActiveState: function () {
+      if (this.activeWindowKey && this.windowStates[this.activeWindowKey]) {
+        return this.windowStates[this.activeWindowKey];
       }
-    });
-    return tmp.innerHTML;
-  };
+      return null;
+    },
 
-  CA.isNearBottom = function () {
-    var $m = document.getElementById('messages');
-    return $m.scrollTop + $m.clientHeight >= $m.scrollHeight - 80;
-  };
+    applyFullUpdate: function (data) {
+      this.machines = data.machines || [];
+      this.windows = data.windows || [];
+      this.windowStates = data.states || {};
+      this.lastUpdateTime = Date.now();
 
-  CA.scheduleAutoScroll = function () {
-    var $m = document.getElementById('messages');
-    var jobId = ++CA.autoScrollJob;
-    requestAnimationFrame(function () {
-      if (jobId !== CA.autoScrollJob || CA.userScrolledUp) return;
-      $m.scrollTop = $m.scrollHeight;
-    });
-  };
+      if (!this.activeWindowKey || !this.windowStates[this.activeWindowKey]) {
+        var best = null;
+        var bestTime = 0;
+        for (var key in this.windowStates) {
+          var st = this.windowStates[key];
+          var t = st && st.extractedAt ? st.extractedAt : 0;
+          if (t > bestTime || !best) {
+            best = key;
+            bestTime = t;
+          }
+        }
+        if (best) {
+          this.activeWindowKey = best;
+          var wInfo = this.windows.find(function (w) { return w.windowKey === best; });
+          if (wInfo) this.activeMachineKey = wInfo.machineKey;
+        }
+      }
+    },
 
-  CA.showToast = function (message, type) {
-    var $c = document.getElementById('toast-container');
-    var toast = document.createElement('div');
-    toast.className = 'toast ' + (type || '');
-    toast.textContent = message;
-    $c.appendChild(toast);
-    setTimeout(function () {
-      toast.style.opacity = '0';
-      toast.style.transition = 'opacity 0.3s';
-      setTimeout(function () { toast.remove(); }, 300);
-    }, 3000);
-  };
+    switchWindow: function (windowKey) {
+      this.activeWindowKey = windowKey;
+      var wInfo = this.windows.find(function (w) { return w.windowKey === windowKey; });
+      if (wInfo) this.activeMachineKey = wInfo.machineKey;
+      this.userScrolledUp = false;
+    },
 
-  CA.getActiveState = function () {
-    if (CA.activeWindowKey && CA.windowStates[CA.activeWindowKey]) {
-      return CA.windowStates[CA.activeWindowKey];
-    }
-    return CA.defaultState;
-  };
+    switchMachine: function (machineKey) {
+      this.activeMachineKey = machineKey;
+      var found = this.windows.find(function (w) {
+        return w.machineKey === machineKey && w.connected;
+      });
+      if (found) {
+        this.activeWindowKey = found.windowKey;
+        this.userScrolledUp = false;
+      }
+    },
 
-  CA.applyMultiUpdate = function (data) {
-    CA.connectedWindows = data.windows || [];
-    CA.windowStates = data.states || {};
+    getWindowsForMachine: function (machineKey) {
+      return this.windows.filter(function (w) { return w.machineKey === machineKey; });
+    },
 
-    if (!CA.activeWindowKey || !CA.windowStates[CA.activeWindowKey]) {
-      var best = null;
-      var bestTime = 0;
-      CA.connectedWindows.forEach(function (w) {
-        var st = CA.windowStates[w.windowKey];
-        var t = st && st.lastExtractedAt ? st.lastExtractedAt : 0;
-        if (t > bestTime || !best) {
-          best = w.windowKey;
-          bestTime = t;
+    getTabsForActiveWindow: function () {
+      var state = this.getActiveState();
+      return state ? (state.chatTabs || []) : [];
+    },
+
+    getChatKey: function (windowKey, tabIndex) {
+      var wk = windowKey || this.activeWindowKey;
+      var ti = typeof tabIndex === 'number' ? tabIndex : this.getActiveTabIndex();
+      return wk ? (wk + '|' + ti) : null;
+    },
+
+    getActiveTabIndex: function () {
+      var tabs = this.getTabsForActiveWindow();
+      for (var i = 0; i < tabs.length; i++) {
+        if (tabs[i].isActive) return i;
+      }
+      return 0;
+    },
+
+    isLoopedForChat: function (chatKey) {
+      if (!chatKey || !this.mcpPerSession) return false;
+      for (var sid in this.mcpPerSession) {
+        var s = this.mcpPerSession[sid];
+        if (s.chatKey === chatKey && s.loopActive) return true;
+      }
+      return false;
+    },
+
+    isWaitingForChat: function (chatKey) {
+      if (!chatKey || !this.mcpPerSession) return false;
+      for (var sid in this.mcpPerSession) {
+        var s = this.mcpPerSession[sid];
+        if (s.chatKey === chatKey && s.waiting) return true;
+      }
+      return false;
+    },
+
+    getLoopStateForChat: function (chatKey) {
+      if (!chatKey || !this.mcpPerSession) return 'idle';
+      for (var sid in this.mcpPerSession) {
+        var s = this.mcpPerSession[sid];
+        if (s.chatKey === chatKey) {
+          if (s.waiting) return 'active';
+          if (s.loopActive) return 'looped';
+        }
+      }
+      return 'idle';
+    },
+
+    isNearBottom: function () {
+      var el = document.getElementById('messages');
+      return el.scrollTop + el.clientHeight >= el.scrollHeight - 60;
+    },
+
+    scheduleAutoScroll: function () {
+      var el = document.getElementById('messages');
+      var jobId = ++this.autoScrollJob;
+      var self = this;
+      requestAnimationFrame(function () {
+        if (jobId !== self.autoScrollJob || self.userScrolledUp) return;
+        el.scrollTop = el.scrollHeight;
+      });
+    },
+
+    showToast: function (message, type) {
+      var container = document.getElementById('toast-container');
+      var toast = document.createElement('div');
+      toast.className = 'toast' + (type ? ' ' + type : '');
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(function () {
+        toast.style.opacity = '0';
+        toast.style.transition = 'opacity 0.3s';
+        setTimeout(function () { toast.remove(); }, 300);
+      }, 3000);
+    },
+
+    escapeHtml: function (str) {
+      var d = document.createElement('div');
+      d.textContent = str;
+      return d.innerHTML;
+    },
+
+    sanitizeHtml: function (html) {
+      var tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      tmp.querySelectorAll('script, iframe, object, embed, form').forEach(function (el) { el.remove(); });
+      tmp.querySelectorAll('*').forEach(function (el) {
+        Array.from(el.attributes).forEach(function (attr) {
+          if (attr.name.startsWith('on') || attr.name === 'srcdoc') el.removeAttribute(attr.name);
+        });
+        if (el.tagName === 'A') {
+          el.setAttribute('target', '_blank');
+          el.setAttribute('rel', 'noopener noreferrer');
         }
       });
-      if (best) CA.activeWindowKey = best;
-    }
-
-    CA.state = Object.assign({}, CA.defaultState, CA.getActiveState());
-  };
-
-  CA.switchWindow = function (windowKey) {
-    CA.activeWindowKey = windowKey;
-    CA.state = Object.assign({}, CA.defaultState, CA.getActiveState());
-    CA.userScrolledUp = false;
-  };
-
-  CA.windowDisplayName = function (windowKey) {
-    if (!windowKey) return 'Cursor';
-    var parts = windowKey.split('|');
-    var folder = parts[0] || '';
-    var segments = folder.replace(/\\/g, '/').split('/');
-    return segments[segments.length - 1] || folder || 'Cursor';
-  };
-
-  CA.isWindowLooped = function (windowKey) {
-    var key = windowKey || CA.activeWindowKey;
-    if (!key) return CA.mcpWaiting || CA.mcpLoopActive;
-    var ps = CA.mcpPerSession || {};
-    for (var sid in ps) {
-      if (ps[sid].windowKey === key && (ps[sid].waiting || ps[sid].loopActive)) return true;
-    }
-    return CA.mcpWaiting || CA.mcpLoopActive;
-  };
-
-  CA.isWindowWaiting = function (windowKey) {
-    var key = windowKey || CA.activeWindowKey;
-    if (!key) return CA.mcpWaiting;
-    var ps = CA.mcpPerSession || {};
-    for (var sid in ps) {
-      if (ps[sid].windowKey === key && ps[sid].waiting) return true;
-    }
-    return false;
-  };
-
-  CA.addOptimisticMessage = function (msgId, text, images, sendStatus) {
-    CA.optimisticMessages.push({
-      id: 'opt-' + msgId,
-      msgId: msgId,
-      type: 'human',
-      text: text,
-      images: images,
-      timestamp: Date.now(),
-      sendStatus: sendStatus || 'sending',
-    });
-    if (CA.optimisticMessages.length > 30) CA.optimisticMessages.shift();
-  };
-
-  CA.updateOptimisticStatus = function (msgId, status) {
-    for (var i = 0; i < CA.optimisticMessages.length; i++) {
-      if (CA.optimisticMessages[i].msgId === msgId) {
-        CA.optimisticMessages[i].sendStatus = status;
-        return;
-      }
-    }
-  };
-
-  CA.setOptimisticCommandId = function (msgId, commandId) {
-    for (var i = 0; i < CA.optimisticMessages.length; i++) {
-      if (CA.optimisticMessages[i].msgId === msgId) {
-        CA.optimisticMessages[i].commandId = commandId;
-        return;
-      }
-    }
-  };
-
-  CA.updateOptimisticStatusByCommandId = function (commandId, status) {
-    for (var i = 0; i < CA.optimisticMessages.length; i++) {
-      if (CA.optimisticMessages[i].commandId === commandId) {
-        CA.optimisticMessages[i].sendStatus = status;
-        return;
-      }
-    }
-  };
-
-  CA.pruneDeliveredOptimistic = function () {
-    var serverMsgTexts = {};
-    var now = Date.now();
-    CA.state.messages.forEach(function (m) {
-      if (m.type === 'human' && m.text) serverMsgTexts[m.text.trim().substring(0, 200)] = true;
-    });
-    CA.optimisticMessages = CA.optimisticMessages.filter(function (om) {
-      var textKey = om.text.trim().substring(0, 200);
-      if (serverMsgTexts[textKey]) return false;
-      if (om.sendStatus === 'delivered' && (now - om.timestamp > 15000)) return false;
-      if (now - om.timestamp > 300000) return false;
-      return true;
-    });
-  };
-
-  CA.getMessagesWithOptimistic = function () {
-    CA.pruneDeliveredOptimistic();
-    if (CA.optimisticMessages.length === 0) return CA.state.messages;
-    var merged = CA.state.messages.slice();
-    var serverTextKeys = {};
-    merged.forEach(function (m) {
-      if (m.type === 'human' && m.text) serverTextKeys[m.text.trim().substring(0, 200)] = true;
-    });
-    CA.optimisticMessages.forEach(function (om) {
-      var textKey = om.text.trim().substring(0, 200);
-      if (!serverTextKeys[textKey]) merged.push(om);
-    });
-    return merged;
-  };
-
-  CA.markStaleOptimisticAsFailed = function () {
-    var now = Date.now();
-    CA.optimisticMessages.forEach(function (om) {
-      if ((om.sendStatus === 'sending' || om.sendStatus === 'sending_mcp') && (now - om.timestamp > 30000)) {
-        om.sendStatus = 'failed';
-      }
-    });
-  };
-
-  CA.timeAgo = function (ts) {
-    if (!ts) return '';
-    var diff = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-    if (diff < 5) return 'now';
-    if (diff < 60) return diff + 's ago';
-    var mins = Math.floor(diff / 60);
-    if (mins < 60) return mins + 'm ago';
-    var hrs = Math.floor(mins / 60);
-    if (hrs < 24) return hrs + 'h ago';
-    return Math.floor(hrs / 24) + 'd ago';
+      return tmp.innerHTML;
+    },
   };
 })();

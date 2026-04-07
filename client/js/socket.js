@@ -1,15 +1,21 @@
 (function () {
   'use strict';
 
-  let socket = null;
-  let _connected = false;
-  const listeners = { state: [], status: [], connect: [], disconnect: [], commandResult: [], multiUpdate: [], mcpStatus: [] };
-  const pendingResults = new Map();
+  var socket = null;
+  var listeners = {};
+  var cmdId = 0;
+
+  function on(event, fn) {
+    if (!listeners[event]) listeners[event] = [];
+    listeners[event].push(fn);
+  }
+
+  function emit(event, data) {
+    (listeners[event] || []).forEach(function (fn) { fn(data); });
+  }
 
   function connect(password) {
     return new Promise(function (resolve, reject) {
-      if (socket) socket.disconnect();
-
       socket = io(window.location.origin, {
         auth: { password: password, role: 'phone' },
         reconnection: true,
@@ -19,121 +25,61 @@
         transports: ['websocket', 'polling'],
       });
 
-      var onFirst = function () {
-        cleanup();
-        _connected = true;
-        fire('connect');
+      socket.on('connect', function () {
+        if (window.CursorApp) window.CursorApp.reconnecting = false;
+        emit('connect');
         resolve();
-      };
+      });
 
-      var onFirstError = function (err) {
-        cleanup();
+      socket.on('connect_error', function (err) {
         reject(err);
-      };
-
-      function cleanup() {
-        socket.off('connect', onFirst);
-        socket.off('connect_error', onFirstError);
-      }
-
-      socket.once('connect', onFirst);
-      socket.once('connect_error', onFirstError);
+      });
 
       socket.on('disconnect', function () {
-        _connected = false;
-        fire('disconnect');
-      });
-
-      socket.on('connect', function () {
-        _connected = true;
-        if (window.CursorApp) window.CursorApp.reconnecting = false;
-        fire('connect');
-      });
-
-      socket.io.on('reconnect_attempt', function () {
         if (window.CursorApp) window.CursorApp.reconnecting = true;
-        fire('disconnect');
+        emit('disconnect');
       });
 
-      socket.io.on('reconnect', function () {
-        if (window.CursorApp) window.CursorApp.reconnecting = false;
+      socket.on('reconnect_attempt', function () {
+        if (window.CursorApp) window.CursorApp.reconnecting = true;
       });
 
-      socket.on('state:update', function (s) { fire('state', s); });
-      socket.on('state:multi_update', function (s) { fire('multiUpdate', s); });
-      socket.on('status:update', function (s) { fire('status', s); });
-      socket.on('mcp:status', function (s) { fire('mcpStatus', s); });
+      socket.on('state:full_update', function (data) {
+        emit('fullUpdate', data);
+      });
 
-      socket.on('command:result', function (result) {
-        var pending = pendingResults.get(result.commandId);
-        if (pending) {
-          pendingResults.delete(result.commandId);
-          pending(result);
-          return;
-        }
-        fire('commandResult', result);
+      socket.on('mcp:status', function (data) {
+        emit('mcpStatus', data);
+      });
+
+      socket.on('command:result', function (data) {
+        emit('commandResult', data);
       });
     });
   }
 
-  function newCommandId() {
-    var c = globalThis.crypto;
-    if (c && typeof c.randomUUID === 'function') return c.randomUUID();
-    return Date.now().toString(36) + '-' + Math.random().toString(36).substr(2, 8);
-  }
-
-  function sendCommand(type, extra) {
-    if (!socket || !_connected) return null;
-    var commandId = newCommandId();
+  function sendCommand(type, params) {
+    if (!socket || !socket.connected) return false;
+    var id = 'cmd-' + (++cmdId);
     var CA = window.CursorApp;
-    var payload = Object.assign({ commandId: commandId, type: type }, extra || {});
-    if (CA && CA.activeWindowKey) payload.targetWindowKey = CA.activeWindowKey;
+    var payload = Object.assign({}, params || {}, {
+      type: type,
+      commandId: id,
+      targetWindowKey: CA ? CA.activeWindowKey : null,
+      chatTabIndex: CA ? CA.getActiveTabIndex() : 0,
+    });
     socket.emit('phone:command', payload);
-    return commandId;
+    return id;
   }
 
-  function sendCommandAwaitResult(type, extra, timeoutMs) {
-    if (!socket || !_connected) {
-      return Promise.resolve({ commandId: '', ok: false, error: 'Not connected' });
-    }
-    var commandId = newCommandId();
-    var CA = window.CursorApp;
-    var payload = Object.assign({ commandId: commandId, type: type }, extra || {});
-    if (CA && CA.activeWindowKey && !payload.targetWindowKey) payload.targetWindowKey = CA.activeWindowKey;
-
-    return new Promise(function (resolve) {
-      var timer = setTimeout(function () {
-        pendingResults.delete(commandId);
-        resolve({ commandId: commandId, ok: false, error: 'Command timed out' });
-      }, timeoutMs || 12000);
-
-      pendingResults.set(commandId, function (result) {
-        clearTimeout(timer);
-        resolve(result);
-      });
-
-      socket.emit('phone:command', payload);
-    });
+  function isConnected() {
+    return socket && socket.connected;
   }
-
-  function on(event, fn) {
-    if (!listeners[event]) listeners[event] = [];
-    listeners[event].push(fn);
-  }
-
-  function fire(event) {
-    var args = Array.prototype.slice.call(arguments, 1);
-    (listeners[event] || []).forEach(function (fn) { try { fn.apply(null, args); } catch (e) { console.warn('[socket]', e); } });
-  }
-
-  function isConnected() { return _connected; }
 
   window.CursorSocket = {
     connect: connect,
-    sendCommand: sendCommand,
-    sendCommandAwaitResult: sendCommandAwaitResult,
     on: on,
+    sendCommand: sendCommand,
     isConnected: isConnected,
-    newCommandId: newCommandId,
   };
 })();

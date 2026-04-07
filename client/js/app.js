@@ -1,7 +1,7 @@
 (function () {
   'use strict';
   var CA = window.CursorApp;
-  var AUTH_KEY = 'cursor-remote-pw';
+  var AUTH_KEY = 'cursor-web-pw';
 
   function init() {
     var saved = localStorage.getItem(AUTH_KEY);
@@ -14,264 +14,255 @@
   }
 
   function connectWithPassword(pw) {
-    var $err = document.getElementById('auth-error');
-    var $btn = document.getElementById('auth-btn');
-    $err.textContent = '';
-    $btn.disabled = true;
-    $btn.textContent = 'Connecting...';
+    var errEl = document.getElementById('auth-error');
+    var btn = document.getElementById('auth-btn');
+    errEl.textContent = '';
+    btn.disabled = true;
+    btn.textContent = 'Connecting...';
 
     CursorSocket.connect(pw).then(function () {
       localStorage.setItem(AUTH_KEY, pw);
       showScreen('main');
       bootstrap();
     }).catch(function (err) {
-      $err.textContent = err.message || 'Connection failed';
+      errEl.textContent = err.message || 'Connection failed';
       localStorage.removeItem(AUTH_KEY);
     }).finally(function () {
-      $btn.disabled = false;
-      $btn.textContent = 'Connect';
+      btn.disabled = false;
+      btn.textContent = 'Connect';
     });
   }
 
   function showScreen(name) {
     document.getElementById('auth-screen').classList.toggle('hidden', name !== 'auth');
     document.getElementById('main-screen').classList.toggle('hidden', name !== 'main');
-    if (name === 'main') document.getElementById('main-screen').classList.add('flex');
   }
 
   function bootstrap() {
-    CursorSocket.on('multiUpdate', function (data) {
-      CA.lastStateUpdateTime = Date.now();
-      CA.applyMultiUpdate(data);
+    CursorSocket.on('fullUpdate', function (data) {
+      CA.applyFullUpdate(data);
       renderAll();
     });
 
-    CursorSocket.on('status', function (st) {
-      if (st && !st.extensionConnected && st.extensionCount === 0) CA.state.connected = false;
-      else if (st && (st.extensionConnected || st.extensionCount > 0)) CA.state.connected = true;
+    CursorSocket.on('mcpStatus', function (data) {
+      CA.mcpWaiting = data && data.waiting;
+      CA.mcpLoopActive = data && data.loopActive;
+      CA.mcpPerSession = (data && data.perSession) || {};
       renderAll();
     });
 
-    CursorSocket.on('mcpStatus', function (s) {
-      CA.mcpWaiting = s && s.waiting;
-      CA.mcpLoopActive = s && s.loopActive;
-      CA.mcpPerSession = (s && s.perSession) || {};
-      renderAll();
+    CursorSocket.on('commandResult', function (result) {
+      if (result.mcpResolved) {
+        CA.showToast('Reply delivered', 'success');
+        return;
+      }
+      if (!result.ok) {
+        CA.showToast(result.error || 'Command failed', 'error');
+      }
     });
 
     CursorSocket.on('connect', function () { renderAll(); });
-    CursorSocket.on('disconnect', function () { CA.markStaleOptimisticAsFailed(); renderAll(); });
+    CursorSocket.on('disconnect', function () { renderAll(); });
 
-    CursorSocket.on('commandResult', function (result) {
-      if (result.mcpResolved && result.msgId) {
-        CA.updateOptimisticStatus(result.msgId, result.mcpStatus || 'delivered');
-        if (result.mcpStatus === 'delivered') CA.showToast('Reply delivered', 'success');
-        renderAll();
-        return;
-      }
-      if (result.ok && result.commandId) {
-        CA.updateOptimisticStatusByCommandId(result.commandId, 'delivered');
-        renderAll();
-        return;
-      }
-      if (!result.ok) CA.showToast(result.error || 'Command failed', 'error');
-    });
-
-    var $messages = document.getElementById('messages');
-    $messages.addEventListener('scroll', function () {
+    var messagesEl = document.getElementById('messages');
+    messagesEl.addEventListener('scroll', function () {
       CA.autoScrollJob++;
       CA.userScrolledUp = !CA.isNearBottom();
     });
 
-    var $input = document.getElementById('message-input');
-    var $btnSend = document.getElementById('btn-send');
-
-    $input.addEventListener('input', function () {
-      $input.style.height = 'auto';
-      $input.style.height = Math.min($input.scrollHeight, 120) + 'px';
-      $btnSend.disabled = !$input.value.trim() && CA.pendingImages.length === 0;
+    var editor = document.getElementById('input-editor');
+    editor.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        CA.sendMessage();
+      }
+    });
+    editor.addEventListener('paste', function (e) {
+      CA.handleImagePaste(e);
     });
 
-    $input.addEventListener('keydown', function (e) {
-      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); CA.sendMessage(); }
-    });
-
-    $input.addEventListener('paste', CA.handleImagePaste);
-
-    $btnSend.addEventListener('click', CA.sendMessage);
+    document.getElementById('btn-send').addEventListener('click', CA.sendMessage);
     document.getElementById('btn-stop').addEventListener('click', CA.handleStop);
-    document.getElementById('btn-attach').addEventListener('click', CA.handleImageFilePick);
 
-    document.getElementById('btn-approve').addEventListener('click', function () {
-      var a = CA.state.pendingApprovals[0];
-      if (!a) return;
-      var act = a.actions.find(function (x) { return x.type === 'approve' || x.type === 'approve_all' || x.type === 'accept'; });
-      if (!act) return;
-      CursorSocket.sendCommand('click_action', { selectorPath: act.selectorPath });
-      CA.showToast('Approved', 'success');
+    var btnAttach = document.getElementById('btn-attach');
+    if (btnAttach) btnAttach.addEventListener('click', CA.handleImageFilePick);
+
+    document.getElementById('input-editor').addEventListener('drop', function (e) {
+      var files = e.dataTransfer && e.dataTransfer.files;
+      if (!files || files.length === 0) return;
+      var hasImage = false;
+      for (var i = 0; i < files.length; i++) {
+        if (files[i].type.indexOf('image') === 0) {
+          hasImage = true;
+          break;
+        }
+      }
+      if (!hasImage) return;
+      e.preventDefault();
+      for (var j = 0; j < files.length; j++) {
+        if (files[j].type.indexOf('image') === 0) {
+          CA.handleDroppedFile(files[j]);
+        }
+      }
     });
 
-    document.getElementById('btn-reject').addEventListener('click', function () {
-      var a = CA.state.pendingApprovals[0];
-      if (!a) return;
-      var act = a.actions.find(function (x) { return x.type === 'reject'; });
-      if (!act) return;
-      CursorSocket.sendCommand('click_action', { selectorPath: act.selectorPath });
-      CA.showToast('Rejected', 'success');
-    });
+    document.getElementById('pill-mode').addEventListener('click', function () { CA.openSheet('mode'); });
+    document.getElementById('pill-model').addEventListener('click', function () { CA.openSheet('model'); });
+    document.getElementById('sheet-overlay').addEventListener('click', CA.closeSheet);
 
     document.getElementById('btn-new-chat').addEventListener('click', function () {
       CursorSocket.sendCommand('new_chat');
       CA.showToast('Creating new chat...', 'success');
     });
 
+    var sidebarNewChat = document.getElementById('sidebar-new-chat');
+    if (sidebarNewChat) {
+      sidebarNewChat.addEventListener('click', function () {
+        CursorSocket.sendCommand('new_chat');
+        CA.showToast('Creating new chat...', 'success');
+      });
+    }
+
+    var toolbarStop = document.getElementById('toolbar-stop');
+    if (toolbarStop) {
+      toolbarStop.addEventListener('click', CA.handleStop);
+    }
+
+    CA.initMachineModal();
     renderAll();
-    setInterval(function () { CA.markStaleOptimisticAsFailed(); renderAll(); }, 15000);
+
+    setInterval(function () {
+      renderConnection();
+    }, 10000);
   }
 
-  function renderConnectionStatus() {
-    var $dot = document.getElementById('connection-dot');
-    var $text = document.getElementById('connection-text');
+  CA.onFullRender = renderAll;
+
+  function renderAll() {
+    renderConnection();
+    renderHeader();
+    CA.renderMachines();
+    CA.renderTabs();
+    CA.renderSidebar();
+    renderMessages();
+    CA.renderInputState();
+    CA.renderModeModel();
+    renderToolbar();
+  }
+
+  function renderConnection() {
+    var dot = document.getElementById('connection-dot');
     if (!CursorSocket.isConnected()) {
-      $dot.className = 'w-2 h-2 rounded-full bg-destructive dot-pulse';
-      $text.textContent = CA.reconnecting ? 'Reconnecting...' : 'Disconnected';
+      dot.className = 'connection-dot ' + (CA.reconnecting ? 'reconnecting' : 'disconnected');
       return;
     }
-    var anyConnected = CA.connectedWindows.some(function (w) { return w.connected; });
-    if (!anyConnected && !CA.state.connected) {
-      $dot.className = 'w-2 h-2 rounded-full bg-yellow-500 dot-pulse';
-      $text.textContent = 'Waiting for Cursor';
+    var hasWindows = CA.windows.some(function (w) { return w.connected; });
+    if (!hasWindows) {
+      dot.className = 'connection-dot reconnecting';
       return;
     }
-    $dot.className = 'w-2 h-2 rounded-full bg-emerald-500';
-    $text.textContent = 'Connected';
+    var stale = CA.lastUpdateTime && (Date.now() - CA.lastUpdateTime > 10000);
+    dot.className = 'connection-dot ' + (stale ? 'stale' : 'connected');
+    dot.title = 'Last update: ' + (CA.lastUpdateTime ? new Date(CA.lastUpdateTime).toLocaleTimeString() : 'never');
   }
 
-  function renderAgentStatus() {
-    var labels = { idle: 'Idle', thinking: 'Thinking...', generating: 'Generating...', running_tool: 'Running tool...', waiting_approval: 'Needs approval', streaming: 'Generating...' };
-    var s = CA.state.agentStatus || 'idle';
-    var $container = document.getElementById('agent-status');
-    var $text = document.getElementById('agent-status-text');
+  function renderHeader() {
+    var state = CA.getActiveState();
+    var titleEl = document.getElementById('chat-title');
+    var statusEl = document.getElementById('agent-status');
 
-    var showLoop = CA.isWindowLooped();
-    var showStatus = s !== 'idle' || showLoop;
-    $container.classList.toggle('hidden', !showStatus);
+    if (state) {
+      titleEl.textContent = state.chatTitle || state.documentTitle || 'Cursor';
+      var agentStatus = state.agentStatus || 'idle';
+      var labels = {
+        idle: '',
+        generating: 'Generating...',
+        thinking: 'Thinking...',
+        streaming: 'Streaming...',
+        running_tool: 'Running tool...',
+      };
 
-    if (showLoop) {
-      if (CA.isWindowWaiting()) {
-        $text.textContent = 'Looped \u2014 waiting for reply';
-        $text.className = 'text-emerald-400';
+      var activeMcp = state.activeMcp;
+      var activeChatKey = CA.getChatKey();
+      var chatLoopState = CA.getLoopStateForChat(activeChatKey);
+
+      var isWaitForResponse = activeMcp && activeMcp.toolName && /wait.for.response/i.test(activeMcp.toolName);
+
+      if (isWaitForResponse || chatLoopState === 'active') {
+        statusEl.textContent = 'Looped \u2013 waiting';
+        statusEl.className = 'agent-status looped';
+      } else if (chatLoopState === 'looped') {
+        statusEl.textContent = 'Looped \u2013 processing';
+        statusEl.className = 'agent-status looped';
+      } else if (activeMcp && activeMcp.toolName) {
+        statusEl.textContent = 'Running ' + activeMcp.toolName + (activeMcp.serverName ? ' in ' + activeMcp.serverName : '');
+        statusEl.className = 'agent-status generating generating-shimmer';
+      } else if (agentStatus !== 'idle') {
+        statusEl.textContent = labels[agentStatus] || agentStatus;
+        statusEl.className = 'agent-status generating generating-shimmer';
       } else {
-        $text.textContent = 'Looped \u2014 processing...';
-        $text.className = 'shimmer-text';
+        statusEl.textContent = '';
+        statusEl.className = 'agent-status';
       }
     } else {
-      $text.textContent = labels[s] || s;
-      $text.className = (s === 'thinking' || s === 'generating' || s === 'streaming') ? 'shimmer-text' : '';
+      titleEl.textContent = 'Cursor Web';
+      statusEl.textContent = CursorSocket.isConnected() ? 'Waiting for IDE...' : '';
+      statusEl.className = 'agent-status';
     }
-  }
-
-  function renderWindows() {
-    var $bar = document.getElementById('window-bar');
-    var $list = document.getElementById('window-list');
-    if (CA.connectedWindows.length <= 1) { $bar.classList.add('hidden'); return; }
-    $bar.classList.remove('hidden');
-    $list.innerHTML = '';
-    CA.connectedWindows.forEach(function (win) {
-      var btn = document.createElement('button');
-      var isActive = win.windowKey === CA.activeWindowKey;
-      btn.className = 'px-3 py-1 rounded-md text-xs font-medium transition-colors ' +
-        (isActive ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:bg-secondary/50');
-      btn.textContent = CA.windowDisplayName(win.windowKey);
-      btn.addEventListener('click', function () {
-        CA.switchWindow(win.windowKey);
-        CA.showToast('Switched to ' + CA.windowDisplayName(win.windowKey), 'success');
-        renderAll();
-      });
-      $list.appendChild(btn);
-    });
-  }
-
-  function renderTabs() {
-    var tabs = CA.state.chatTabs || [];
-    var $bar = document.getElementById('tab-bar');
-    var $list = document.getElementById('tab-list');
-    if (tabs.length <= 1) { $bar.classList.add('hidden'); return; }
-    $bar.classList.remove('hidden');
-    $list.innerHTML = '';
-    tabs.forEach(function (tab, i) {
-      var btn = document.createElement('button');
-      btn.className = 'px-2.5 py-1 rounded-md text-xs transition-colors truncate max-w-[120px] ' +
-        (tab.isActive ? 'bg-secondary text-foreground font-medium' : 'text-muted-foreground hover:bg-secondary/50');
-      btn.textContent = tab.title || 'Chat ' + (i + 1);
-      btn.addEventListener('click', function () {
-        CursorSocket.sendCommand('switch_tab', { selectorPath: tab.selectorPath });
-      });
-      $list.appendChild(btn);
-    });
   }
 
   function renderMessages() {
-    var $messages = document.getElementById('messages');
-    var $emptyState = document.getElementById('empty-state');
-    var allMessages = CA.getMessagesWithOptimistic();
+    var state = CA.getActiveState();
+    if (!state) {
+      CA.renderMessageList([]);
+      var emptyText = document.getElementById('empty-state-text');
+      if (emptyText) {
+        if (!CursorSocket.isConnected()) {
+          emptyText.textContent = 'Connecting to server...';
+        } else if (CA.windows.length === 0) {
+          emptyText.textContent = 'Waiting for Cursor IDE...';
+        } else {
+          emptyText.textContent = 'No messages yet';
+        }
+      }
+      return;
+    }
+    CA.renderMessageList(state.messages || []);
+    CA.renderLoadingIndicator(state.isLoading || (state.agentStatus === 'generating'));
+  }
 
-    if (allMessages.length === 0) {
-      $emptyState.classList.remove('hidden');
-      $messages.querySelectorAll('.chat-el').forEach(function (el) { el.remove(); });
+  function renderToolbar() {
+    var toolbar = document.getElementById('toolbar-area');
+    var state = CA.getActiveState();
+    if (!state) {
+      toolbar.classList.add('hidden');
       return;
     }
 
-    $emptyState.classList.add('hidden');
-    var existingEls = $messages.querySelectorAll('.chat-el');
-    var existingMap = new Map();
-    existingEls.forEach(function (el) { existingMap.set(el.dataset.id, el); });
-    var newIds = new Set(allMessages.map(function (m) { return m.id; }));
-    existingEls.forEach(function (el) { if (!newIds.has(el.dataset.id)) el.remove(); });
+    var isActive = state.agentStatus && state.agentStatus !== 'idle';
+    var hasFiles = state.toolbarButtons && state.toolbarButtons.files;
 
-    allMessages.forEach(function (msg, index) {
-      var el = existingMap.get(msg.id);
-      if (!el) {
-        el = CA.createElement(msg);
-        if (msg.sendStatus) {
-          var badge = document.createElement('div');
-          badge.className = 'optimistic-badge' + (msg.sendStatus === 'failed' ? ' optimistic-badge-failed' : '');
-          badge.textContent = msg.sendStatus === 'failed' ? 'Failed to send' : 'Sending...';
-          var bubble = el.querySelector('.human-bubble');
-          if (bubble) bubble.appendChild(badge);
-        }
-        var allEls = $messages.querySelectorAll('.chat-el');
-        if (index < allEls.length) $messages.insertBefore(el, allEls[index]);
-        else $messages.appendChild(el);
-      } else {
-        CA.updateElement(el, msg);
-      }
-    });
-
-    if (!CA.userScrolledUp) CA.scheduleAutoScroll();
-  }
-
-  function renderApprovals() {
-    var $bar = document.getElementById('approval-bar');
-    var $desc = document.getElementById('approval-desc');
-    if (CA.state.pendingApprovals.length > 0) {
-      $bar.classList.remove('hidden');
-      $bar.classList.add('flex');
-      $desc.textContent = CA.state.pendingApprovals[0].description || 'Action needs approval';
-    } else {
-      $bar.classList.add('hidden');
-      $bar.classList.remove('flex');
+    if (!isActive && !hasFiles) {
+      toolbar.classList.add('hidden');
+      return;
     }
-  }
 
-  function renderAll() {
-    renderConnectionStatus();
-    renderAgentStatus();
-    renderWindows();
-    renderTabs();
-    renderMessages();
-    renderApprovals();
-    CA.renderInputState();
+    toolbar.classList.remove('hidden');
+
+    var filesEl = document.getElementById('toolbar-files');
+    var stopBtn = document.getElementById('toolbar-stop');
+    var reviewBtn = document.getElementById('toolbar-review');
+
+    if (hasFiles) {
+      var fileCount = state.toolbarButtons.files;
+      filesEl.innerHTML = '<span class="codicon codicon-chevron-right"></span> ' + fileCount + ' Files';
+      filesEl.style.display = '';
+    } else {
+      filesEl.style.display = 'none';
+    }
+
+    stopBtn.classList.toggle('hidden', !isActive);
+    reviewBtn.classList.toggle('hidden', !isActive);
   }
 
   document.addEventListener('DOMContentLoaded', init);

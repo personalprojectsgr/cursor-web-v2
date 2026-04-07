@@ -2,138 +2,454 @@
   'use strict';
   var CA = window.CursorApp;
 
-  CA.createElement = function (msg) {
-    var el;
-    switch (msg.type) {
-      case 'human': el = createHumanEl(msg); break;
-      case 'assistant': el = createAssistantEl(msg); break;
-      case 'terminal': case 'edit': case 'mcp_tool': case 'tool_line': el = createToolEl(msg); break;
-      case 'thought': el = createThoughtEl(msg); break;
-      case 'loading': el = createLoadingEl(msg); break;
-      default: el = createFallbackEl(msg); break;
+  CA.renderMessageList = function (messages) {
+    var container = document.getElementById('messages');
+    var emptyState = document.getElementById('empty-state');
+
+    if (!messages || messages.length === 0) {
+      emptyState.style.display = '';
+      container.querySelectorAll('.chat-msg').forEach(function (el) { el.remove(); });
+      return;
     }
-    el.dataset.msgType = msg.type;
-    return el;
+
+    emptyState.style.display = 'none';
+
+    var existingMap = new Map();
+    container.querySelectorAll('.chat-msg').forEach(function (el) {
+      existingMap.set(el.dataset.msgId, el);
+    });
+
+    var currentIds = new Set(messages.map(function (m) { return m.id; }));
+    existingMap.forEach(function (el, id) {
+      if (!currentIds.has(id)) el.remove();
+    });
+
+    messages.forEach(function (msg, idx) {
+      var existing = existingMap.get(msg.id);
+      if (existing) {
+        updateMessage(existing, msg);
+      } else {
+        var el = createMessage(msg);
+        var allEls = container.querySelectorAll('.chat-msg');
+        if (idx < allEls.length) container.insertBefore(el, allEls[idx]);
+        else container.appendChild(el);
+      }
+    });
+
+    if (!CA.userScrolledUp) CA.scheduleAutoScroll();
   };
 
-  CA.updateElement = function (el, msg) {
-    switch (msg.type) {
-      case 'human': updateHumanEl(el, msg); break;
-      case 'assistant': updateAssistantEl(el, msg); break;
-      case 'terminal': case 'edit': case 'mcp_tool': case 'tool_line': updateToolEl(el, msg); break;
-      case 'thought': updateThoughtEl(el, msg); break;
-      default: break;
-    }
-  };
-
-  function createHumanEl(msg) {
+  function createMessage(msg) {
     var el = document.createElement('div');
-    el.className = 'chat-el msg-human';
-    el.dataset.id = msg.id;
-    var bubble = document.createElement('div');
-    bubble.className = 'human-bubble';
-    var text = document.createElement('div');
-    text.textContent = msg.text;
-    bubble.appendChild(text);
-    if (msg.images && msg.images.length > 0) {
-      var imgRow = document.createElement('div');
-      imgRow.className = 'flex gap-1 mt-1';
-      msg.images.forEach(function (src) {
-        var img = document.createElement('img');
-        img.src = src;
-        img.className = 'h-16 rounded-md cursor-pointer';
-        imgRow.appendChild(img);
+    el.className = 'chat-msg';
+    el.dataset.msgId = msg.id;
+    el.dataset.type = msg.type;
+
+    if (msg.type === 'human') {
+      el.classList.add('msg-human');
+      if (msg.contextPills && msg.contextPills.length > 0) {
+        var pillsContainer = document.createElement('div');
+        pillsContainer.className = 'context-pills';
+        msg.contextPills.forEach(function (pill) {
+          var pillEl = document.createElement('div');
+          pillEl.className = 'context-pill' + (pill.type === 'image' ? ' context-pill-image' : '');
+          if (pill.type === 'image' && pill.src) {
+            var img = document.createElement('img');
+            img.className = 'context-pill-img';
+            img.alt = pill.alt || 'Attached image';
+            img.src = pill.src;
+            pillEl.appendChild(img);
+          } else {
+            var label = document.createElement('span');
+            label.className = 'context-pill-label';
+            label.textContent = pill.label || pill.text || '';
+            pillEl.appendChild(label);
+          }
+          pillsContainer.appendChild(pillEl);
+        });
+        el.appendChild(pillsContainer);
+      }
+      var bubble = document.createElement('div');
+      bubble.className = 'human-bubble';
+      var inner = document.createElement('div');
+      inner.className = 'human-bubble-inner';
+      inner.textContent = msg.text || '';
+      bubble.appendChild(inner);
+      el.appendChild(bubble);
+    } else if (msg.type === 'assistant') {
+      el.classList.add('msg-assistant');
+      renderAssistantParts(el, msg.parts || []);
+    }
+
+    return el;
+  }
+
+  function updateMessage(el, msg) {
+    if (msg.type === 'human') {
+      var inner = el.querySelector('.human-bubble-inner');
+      if (inner) inner.textContent = msg.text || '';
+    } else if (msg.type === 'assistant') {
+      var parts = msg.parts || [];
+      var existingParts = el.querySelectorAll('[data-part-idx]');
+      var needsFullRebuild = existingParts.length !== parts.length;
+
+      if (!needsFullRebuild) {
+        for (var i = 0; i < parts.length; i++) {
+          var partEl = existingParts[i];
+          var part = parts[i];
+          if (part.type === 'markdown' && partEl.classList.contains('md-content')) {
+            var currentLen = (partEl.textContent || '').length;
+            var newLen = (part.text || '').length;
+            if (currentLen !== newLen) { needsFullRebuild = true; break; }
+          } else if (part.type === 'tool_call') {
+            var wasRunning = partEl.classList.contains('running');
+            var nowRunning = !!part.isRunning;
+            if (wasRunning !== nowRunning) { needsFullRebuild = true; break; }
+            var oldDesc = (partEl.querySelector('.tool-call-desc') || {}).textContent || '';
+            var newDesc = part.description || '';
+            if (oldDesc.length !== newDesc.length) { needsFullRebuild = true; break; }
+            var oldOutput = (partEl.querySelector('.tool-call-body-content') || {}).textContent || '';
+            var newOutput = (part.output || part.content || '');
+            if (oldOutput.length !== newOutput.length) { needsFullRebuild = true; break; }
+          } else if (part.type === 'code_block') {
+            var oldDiffCount = partEl.querySelectorAll('.diff-line').length;
+            var newDiffCount = part.diff ? part.diff.length : 0;
+            var codeEl = partEl.querySelector('pre code');
+            var oldCodeLen = codeEl ? (codeEl.textContent || '').length : 0;
+            var newCodeLen = (part.code || '').length;
+            var oldFilename = (partEl.querySelector('.code-block-filename') || {}).textContent || '';
+            var newFilename = part.filename || '';
+            if (oldDiffCount !== newDiffCount || oldCodeLen !== newCodeLen || oldFilename !== newFilename) {
+              needsFullRebuild = true; break;
+            }
+          } else if (part.type === 'todo_list') {
+            var oldItems = partEl.querySelectorAll('.todo-item').length;
+            var newItems = (part.items || []).length;
+            if (oldItems !== newItems) { needsFullRebuild = true; break; }
+          } else if (part.type !== partEl.className.split(' ')[0].replace(/-/g, '_')) {
+            needsFullRebuild = true; break;
+          }
+        }
+      }
+
+      if (needsFullRebuild) {
+        el.innerHTML = '';
+        renderAssistantParts(el, parts);
+      }
+    }
+  }
+
+  function renderAssistantParts(container, parts) {
+    parts.forEach(function (part, idx) {
+      var partEl = document.createElement('div');
+      partEl.dataset.partIdx = idx;
+
+      switch (part.type) {
+        case 'markdown':
+          renderMarkdown(partEl, part);
+          break;
+        case 'tool_call':
+          renderToolCall(partEl, part);
+          break;
+        case 'code_block':
+          renderCodeBlock(partEl, part);
+          break;
+        case 'question':
+          renderQuestion(partEl, part);
+          break;
+        case 'todo_summary':
+          renderTodo(partEl, part);
+          break;
+        case 'todo_list':
+          renderTodoList(partEl, part);
+          break;
+        case 'tool_call_line':
+          renderToolCallLine(partEl, part);
+          break;
+        case 'tool_summary':
+          renderToolSummary(partEl, part);
+          break;
+        default:
+          partEl.className = 'md-content';
+          partEl.textContent = part.text || part.content || '';
+      }
+
+      container.appendChild(partEl);
+    });
+  }
+
+  function renderMarkdown(el, part) {
+    el.className = 'md-content';
+    if (part.html) {
+      el.innerHTML = CA.sanitizeHtml(part.html);
+      el.querySelectorAll('pre code').forEach(function (code) {
+        if (typeof Prism !== 'undefined') Prism.highlightElement(code);
       });
-      bubble.appendChild(imgRow);
-    }
-    el.appendChild(bubble);
-    return el;
-  }
-
-  function updateHumanEl(el, msg) {
-    var t = el.querySelector('.human-bubble > div');
-    if (t) t.textContent = msg.text;
-  }
-
-  function createAssistantEl(msg) {
-    var el = document.createElement('div');
-    el.className = 'chat-el msg-assistant';
-    el.dataset.id = msg.id;
-    var bubble = document.createElement('div');
-    bubble.className = 'assistant-bubble';
-    var content = document.createElement('div');
-    if (msg.html) {
-      content.innerHTML = CA.sanitizeHtml(msg.html);
     } else {
-      content.textContent = msg.text;
-    }
-    bubble.appendChild(content);
-    el.appendChild(bubble);
-    return el;
-  }
-
-  function updateAssistantEl(el, msg) {
-    var content = el.querySelector('.assistant-bubble > div');
-    if (!content) return;
-    if (msg.html) {
-      content.innerHTML = CA.sanitizeHtml(msg.html);
-    } else {
-      content.textContent = msg.text;
+      el.textContent = part.text || '';
     }
   }
 
-  function mapToolStatus(msg) {
-    if (msg.type === 'terminal') return msg.isRunning ? 'loading' : 'completed';
-    if (msg.type === 'edit') return 'completed';
-    if (msg.type === 'mcp_tool') return msg.isRunning ? 'loading' : 'completed';
-    return 'completed';
-  }
+  function renderToolCall(el, part) {
+    var isMcp = part.subtype === 'mcp';
+    var isTerminal = part.subtype === 'terminal';
+    var isRunning = part.isRunning;
+    el.className = 'tool-call-block expanded' + (isRunning ? ' running' : '');
 
-  function createToolEl(msg) {
-    var el = document.createElement('div');
-    el.className = 'chat-el msg-tool';
-    el.dataset.id = msg.id;
-    var status = mapToolStatus(msg);
+    var header = document.createElement('div');
+    header.className = 'tool-call-header';
+
+    var left = document.createElement('div');
+    left.className = 'tool-call-header-left';
+
+    if (isRunning) {
+      var spinner = document.createElement('span');
+      spinner.className = 'tool-call-icon codicon codicon-loading codicon-modifier-spin';
+      left.appendChild(spinner);
+    }
+
     var icon = document.createElement('span');
-    icon.className = status === 'completed' ? 'tool-icon-done' : 'tool-icon-running';
-    icon.textContent = status === 'completed' ? '\u2713' : '\u25CF';
-    el.appendChild(icon);
-    var label = document.createElement('span');
-    label.textContent = msg.description || msg.name || msg.details || msg.filename || msg.type;
-    el.appendChild(label);
-    return el;
+    if (isMcp) {
+      icon.className = 'tool-call-icon codicon codicon-cube-nodes';
+    } else if (isTerminal) {
+      icon.className = 'tool-call-icon codicon codicon-terminal';
+    } else {
+      icon.className = 'tool-call-icon codicon codicon-tools';
+    }
+    left.appendChild(icon);
+
+    var chevron = document.createElement('span');
+    chevron.className = 'tool-call-chevron codicon codicon-chevron-right';
+    left.appendChild(chevron);
+
+    var desc = document.createElement('span');
+    desc.className = 'tool-call-desc' + (isRunning ? ' make-shine' : '');
+    if (isMcp) {
+      var verb = part.verb || 'Running';
+      var toolName = part.toolName || '';
+      var serverName = part.serverName || '';
+      desc.innerHTML = '<span class="tool-call-verb">' + CA.escapeHtml(verb) + '</span> ' +
+        '<strong>' + CA.escapeHtml(toolName) + '</strong>' +
+        (serverName ? ' <span class="tool-call-server">in ' + CA.escapeHtml(serverName) + '</span>' : '');
+    } else {
+      desc.textContent = part.description || 'Tool call';
+    }
+    left.appendChild(desc);
+    header.appendChild(left);
+
+    var actions = document.createElement('div');
+    actions.className = 'tool-call-actions';
+
+    var copyBtn = document.createElement('button');
+    copyBtn.className = 'btn-icon';
+    copyBtn.title = 'Copy';
+    copyBtn.innerHTML = '<span class="codicon codicon-copy"></span>';
+    copyBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      navigator.clipboard.writeText(part.output || part.content || part.description || '');
+      CA.showToast('Copied', 'success');
+    });
+    actions.appendChild(copyBtn);
+    header.appendChild(actions);
+
+    header.addEventListener('click', function () {
+      el.classList.toggle('expanded');
+    });
+
+    el.appendChild(header);
+
+    if (part.output || part.content) {
+      var body = document.createElement('div');
+      body.className = 'tool-call-body';
+      var content = document.createElement('div');
+      content.className = 'tool-call-body-content';
+      content.textContent = part.output || part.content || '';
+      body.appendChild(content);
+      el.appendChild(body);
+    }
   }
 
-  function updateToolEl(el, msg) {
-    var fresh = createToolEl(msg);
-    el.innerHTML = fresh.innerHTML;
+  function renderCodeBlock(el, part) {
+    el.className = 'code-block expanded';
+
+    var header = document.createElement('div');
+    header.className = 'code-block-header';
+
+    var fileInfo = document.createElement('div');
+    fileInfo.className = 'code-block-file-info';
+
+    if (part.fileIconClass) {
+      var fileIcon = document.createElement('span');
+      fileIcon.className = part.fileIconClass;
+      fileInfo.appendChild(fileIcon);
+    }
+
+    var filename = document.createElement('span');
+    filename.className = 'code-block-filename';
+    filename.textContent = part.filename || 'file';
+    if (part.isNew) filename.textContent += ' (new)';
+    fileInfo.appendChild(filename);
+
+    if (part.status) {
+      var status = document.createElement('span');
+      status.className = 'code-block-status' + (part.status.startsWith('-') ? ' removed' : '');
+      status.textContent = part.status;
+      fileInfo.appendChild(status);
+    }
+
+    header.appendChild(fileInfo);
+
+    var chevron = document.createElement('span');
+    chevron.className = 'tool-call-chevron codicon codicon-chevron-right';
+    header.appendChild(chevron);
+
+    header.addEventListener('click', function () {
+      el.classList.toggle('expanded');
+    });
+
+    el.appendChild(header);
+
+    var codeContent = document.createElement('div');
+    codeContent.className = 'code-block-content';
+
+    if (part.diff && part.diff.length > 0) {
+      var diffContainer = document.createElement('div');
+      diffContainer.className = 'diff-container';
+      part.diff.forEach(function (line) {
+        var lineEl = document.createElement('div');
+        lineEl.className = 'diff-line ' + line.type;
+        var indicator = document.createElement('div');
+        indicator.className = 'diff-indicator';
+        lineEl.appendChild(indicator);
+        var lineContent = document.createElement('div');
+        lineContent.className = 'diff-line-content';
+        lineContent.textContent = line.content || '';
+        lineEl.appendChild(lineContent);
+        diffContainer.appendChild(lineEl);
+      });
+      codeContent.appendChild(diffContainer);
+    } else if (part.code) {
+      var pre = document.createElement('pre');
+      var code = document.createElement('code');
+      var lang = guessLanguage(part.filename || '');
+      if (lang) code.className = 'language-' + lang;
+      code.textContent = part.code;
+      pre.appendChild(code);
+      codeContent.appendChild(pre);
+      if (typeof Prism !== 'undefined') Prism.highlightElement(code);
+    }
+
+    el.appendChild(codeContent);
   }
 
-  function createThoughtEl(msg) {
-    var el = document.createElement('div');
-    el.className = 'chat-el msg-thought';
-    el.dataset.id = msg.id;
-    el.textContent = msg.duration ? 'Thought for ' + msg.duration : (msg.action || 'Thinking\u2026');
-    return el;
+  function renderQuestion(el, part) {
+    el.className = 'question-block';
+    var qText = document.createElement('div');
+    qText.className = 'question-text';
+    qText.textContent = part.question || '';
+    el.appendChild(qText);
+
+    if (part.answers && part.answers.length > 0) {
+      var answers = document.createElement('div');
+      answers.className = 'question-answers';
+      part.answers.forEach(function (a) {
+        var item = document.createElement('div');
+        item.className = 'question-answer';
+        item.textContent = a;
+        answers.appendChild(item);
+      });
+      el.appendChild(answers);
+    }
   }
 
-  function updateThoughtEl(el, msg) {
-    el.textContent = msg.duration ? 'Thought for ' + msg.duration : (msg.action || 'Thinking\u2026');
+  function renderTodo(el, part) {
+    el.className = 'todo-summary';
+    el.textContent = part.content || '';
   }
 
-  function createLoadingEl(msg) {
-    var el = document.createElement('div');
-    el.className = 'chat-el msg-loading';
-    el.dataset.id = msg.id;
-    for (var i = 0; i < 3; i++) { var d = document.createElement('span'); el.appendChild(d); }
-    return el;
+  function renderTodoList(el, part) {
+    el.className = 'todo-list-block';
+
+    var header = document.createElement('div');
+    header.className = 'todo-list-header';
+    var icon = document.createElement('span');
+    icon.className = 'codicon codicon-checklist';
+    header.appendChild(icon);
+    var title = document.createElement('span');
+    title.className = 'todo-list-title';
+    title.textContent = part.header || 'To-dos';
+    header.appendChild(title);
+    el.appendChild(header);
+
+    if (part.items && part.items.length > 0) {
+      var list = document.createElement('div');
+      list.className = 'todo-items';
+      part.items.forEach(function (item) {
+        var row = document.createElement('div');
+        row.className = 'todo-item todo-item--' + (item.status || 'pending');
+        var indicator = document.createElement('span');
+        indicator.className = 'todo-item-indicator';
+        if (item.status === 'completed') {
+          indicator.innerHTML = '<span class="codicon codicon-pass-filled"></span>';
+        } else if (item.status === 'in_progress') {
+          indicator.innerHTML = '<span class="codicon codicon-loading codicon-modifier-spin"></span>';
+        } else {
+          indicator.innerHTML = '<span class="todo-item-circle"></span>';
+        }
+        row.appendChild(indicator);
+        var content = document.createElement('span');
+        content.className = 'todo-item-content';
+        content.textContent = item.content || '';
+        row.appendChild(content);
+        list.appendChild(row);
+      });
+      el.appendChild(list);
+    }
   }
 
-  function createFallbackEl(msg) {
-    var el = document.createElement('div');
-    el.className = 'chat-el text-xs text-muted-foreground';
-    el.dataset.id = msg.id;
-    el.textContent = msg.text || msg.type || '...';
-    return el;
+  function renderToolCallLine(el, part) {
+    el.className = 'tool-call-line' + (part.isClickable ? ' clickable' : '');
+    var actionEl = document.createElement('span');
+    actionEl.className = 'tool-call-line-action';
+    actionEl.textContent = part.action || '';
+    el.appendChild(actionEl);
+    var detailsEl = document.createElement('span');
+    detailsEl.className = 'tool-call-line-details';
+    detailsEl.textContent = part.details || '';
+    el.appendChild(detailsEl);
   }
+
+  function renderToolSummary(el, part) {
+    el.className = 'tool-summary-line';
+    el.textContent = part.content || '';
+  }
+
+  function guessLanguage(filename) {
+    var ext = filename.split('.').pop().toLowerCase();
+    var map = {
+      js: 'javascript', ts: 'typescript', jsx: 'jsx', tsx: 'tsx',
+      py: 'python', rb: 'ruby', go: 'go', rs: 'rust',
+      java: 'java', kt: 'kotlin', cs: 'csharp', cpp: 'cpp',
+      c: 'c', h: 'c', hpp: 'cpp', css: 'css', scss: 'scss',
+      html: 'html', xml: 'xml', json: 'json', yaml: 'yaml',
+      yml: 'yaml', md: 'markdown', sql: 'sql', sh: 'bash',
+      bash: 'bash', zsh: 'bash', ps1: 'powershell', dockerfile: 'docker',
+      toml: 'toml', ini: 'ini', lua: 'lua', r: 'r', swift: 'swift',
+    };
+    return map[ext] || null;
+  }
+
+  CA.renderLoadingIndicator = function (isLoading) {
+    var container = document.getElementById('messages');
+    var existing = container.querySelector('.loading-indicator');
+    if (isLoading && !existing) {
+      var el = document.createElement('div');
+      el.className = 'loading-indicator';
+      el.innerHTML = '<span class="loading-dot"></span><span class="loading-dot"></span><span class="loading-dot"></span>';
+      container.appendChild(el);
+      if (!CA.userScrolledUp) CA.scheduleAutoScroll();
+    } else if (!isLoading && existing) {
+      existing.remove();
+    }
+  };
 })();

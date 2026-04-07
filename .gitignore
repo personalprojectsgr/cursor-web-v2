@@ -1,3 +1,7 @@
 node_modules/
 .env
 .vercel
+.playwright-mcp/
+.cursor/
+machines.json
+*.png
