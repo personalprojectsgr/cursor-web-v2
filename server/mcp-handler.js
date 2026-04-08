@@ -8,7 +8,7 @@ const log = createLogger('mcp');
 
 const WAIT_TIMEOUT_MS = 240_000;
 const ROUTE_POLL_MS = 200;
-const ROUTE_WAIT_MAX_MS = 30_000;
+const ROUTE_WAIT_MAX_MS = 60_000;
 const REAP_IDLE_MS = 86_400_000;
 const CLEANUP_INTERVAL_MS = 120_000;
 const HEARTBEAT_INTERVAL_MS = 120_000;
@@ -21,6 +21,7 @@ class Session {
     this.chatKey = null;
     this.transport = null;
     this.pendingWaiter = null;
+    this.pendingMessages = [];
     this.state = 'unbound';
     this.createdAt = Date.now();
     this.lastActivityAt = Date.now();
@@ -61,6 +62,7 @@ class Session {
       waiterCount: this.waiterCount,
       delivered: this.delivered,
       keepalives: this.keepalives,
+      queued: this.pendingMessages.length,
       idleSinceMs: this.idleSinceMs,
       ageMs: Date.now() - this.createdAt,
     };
@@ -116,6 +118,16 @@ class SessionManager {
     sess.touch();
 
     if (!sess.chatKey) this._tryAutoBind(sess);
+
+    if (sess.pendingMessages.length > 0) {
+      const queued = sess.pendingMessages.shift();
+      sess.delivered++;
+      sess.lastResolvedAt = Date.now();
+      sess.state = sess.chatKey ? 'bound' : 'unbound';
+      log.info('WAIT drain queued', { sid: sess.shortId, chatKey: sess.chatKey || 'UNBOUND', remaining: sess.pendingMessages.length });
+      this._fire();
+      return Promise.resolve(queued);
+    }
 
     if (sess.pendingWaiter) {
       log.warn('Overwriting stale waiter', { sid: sess.shortId });
@@ -189,7 +201,14 @@ class SessionManager {
     }
 
     if (!target) {
-      log.warn('ROUTE -> EXHAUSTED', { trace, sid: sess.shortId });
+      const MAX_QUEUED = 10;
+      if (sess.pendingMessages.length < MAX_QUEUED) {
+        sess.pendingMessages.push(buildResult(text, images));
+        this._trackDelivered(id);
+        log.info('ROUTE -> QUEUED', { trace, sid: sess.shortId, chatKey: sess.chatKey, queueLen: sess.pendingMessages.length });
+        return { accepted: true, id, status: 'queued' };
+      }
+      log.warn('ROUTE -> EXHAUSTED (queue full)', { trace, sid: sess.shortId });
       return { accepted: false, id, status: 'wait_exhausted' };
     }
 
