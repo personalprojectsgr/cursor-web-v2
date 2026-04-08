@@ -51,8 +51,9 @@ app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
     const duration = Date.now() - start;
-    if (req.path !== '/health' || duration > 100) {
-      log.debug(`${req.method} ${req.path} ${res.statusCode}`, { durationMs: duration });
+    const skip = req.path === '/health' || req.path === '/mcp' || req.path.startsWith('/socket.io');
+    if (!skip && duration > 500) {
+      log.info(`SLOW ${req.method} ${req.path} ${res.statusCode}`, { ms: duration });
     }
   });
   next();

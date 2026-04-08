@@ -6,7 +6,7 @@ const { createLogger } = require('./logger');
 
 const log = createLogger('mcp');
 
-const WAIT_KEEPALIVE_MS = 240_000;
+const SSE_PING_MS = 30_000;
 const ROUTE_POLL_MS = 200;
 const ROUTE_WAIT_MAX_MS = 60_000;
 const REAP_IDLE_MS = 86_400_000;
@@ -20,6 +20,7 @@ class Session {
     this.shortId = id.substring(0, 8);
     this.chatKey = null;
     this.transport = null;
+    this.mcpServer = null;
     this.pendingWaiter = null;
     this.pendingMessages = [];
     this.state = 'unbound';
@@ -29,7 +30,7 @@ class Session {
     this.lastResolvedAt = 0;
     this.waiterCount = 0;
     this.delivered = 0;
-    this.keepalives = 0;
+    this.ssePings = 0;
   }
 
   get isAlive() {
@@ -61,7 +62,7 @@ class Session {
       hasWaiter: this.hasWaiter,
       waiterCount: this.waiterCount,
       delivered: this.delivered,
-      keepalives: this.keepalives,
+      ssePings: this.ssePings,
       queued: this.pendingMessages.length,
       idleSinceMs: this.idleSinceMs,
       ageMs: Date.now() - this.createdAt,
@@ -82,12 +83,13 @@ class SessionManager {
   setOnWaiterChange(fn) { this._onWaiterChange = fn; }
   setActiveChatProvider(fn) { this._getActiveChats = fn; }
 
-  create(id, transport) {
+  create(id, transport, mcpServer) {
     const s = new Session(id);
     s.transport = transport;
+    s.mcpServer = mcpServer || null;
     this.sessions.set(id, s);
     s.state = 'unbound';
-    log.info('SESSION created', { sid: s.shortId });
+    log.info('SESSION new', { sid: s.shortId });
     this._fire();
     return s;
   }
@@ -98,18 +100,17 @@ class SessionManager {
 
   bind(sess, chatKey, reason) {
     if (!chatKey || sess.chatKey === chatKey) return;
-    const prev = sess.chatKey;
     sess.chatKey = chatKey;
     sess.state = 'bound';
     sess.touch();
-    log.info('SESSION bound', { sid: sess.shortId, chatKey, prev, reason });
+    log.info('BIND', { sid: sess.shortId, ck: chatKey, reason });
     this._fire();
   }
 
-  handleWait(sessionId) {
+  handleWait(sessionId, extra) {
     const sess = this.get(sessionId);
     if (!sess) {
-      log.error('wait_for_response: unknown session', { sessionId: sessionId?.substring(0, 8) });
+      log.error('WAIT unknown session', { sid: sessionId?.substring(0, 8) });
       return Promise.resolve({ content: [{ type: 'text', text: '' }] });
     }
 
@@ -124,43 +125,36 @@ class SessionManager {
       sess.delivered++;
       sess.lastResolvedAt = Date.now();
       sess.state = sess.chatKey ? 'bound' : 'unbound';
-      log.info('WAIT drain queued', { sid: sess.shortId, chatKey: sess.chatKey || 'UNBOUND', remaining: sess.pendingMessages.length });
+      log.info('WAIT drain', { sid: sess.shortId, ck: sess.chatKey, q: sess.pendingMessages.length });
       this._fire();
       return Promise.resolve(queued);
     }
 
     if (sess.pendingWaiter) {
-      log.warn('Overwriting stale waiter', { sid: sess.shortId });
-      try { sess.pendingWaiter.resolve({ content: [{ type: 'text', text: '' }] }); } catch (e) {}
-      sess.pendingWaiter = null;
+      log.warn('WAIT overwrite stale', { sid: sess.shortId });
+      this._clearWaiter(sess, '');
     }
 
     sess.state = 'waiting';
-    log.info('WAIT called', {
-      sid: sess.shortId,
-      chatKey: sess.chatKey || 'UNBOUND',
-      n: sess.waiterCount,
-    });
+    log.info('WAIT open', { sid: sess.shortId, ck: sess.chatKey, n: sess.waiterCount });
 
     return new Promise((resolve) => {
       const wid = crypto.randomUUID();
 
-      const timer = setTimeout(() => {
-        if (sess.pendingWaiter && sess.pendingWaiter._id === wid) {
-          sess.keepalives++;
-          sess.pendingWaiter = null;
-          sess.lastResolvedAt = Date.now();
-          sess.state = sess.chatKey ? 'bound' : 'unbound';
-          log.info('WAIT keepalive', { sid: sess.shortId, n: sess.keepalives });
+      const pingTimer = setInterval(() => {
+        if (!sess.pendingWaiter || sess.pendingWaiter._id !== wid) {
+          clearInterval(pingTimer);
+          return;
         }
-        resolve({ content: [{ type: 'text', text: '<!-- keepalive -->' }] });
-      }, WAIT_KEEPALIVE_MS);
+        sess.ssePings++;
+        this._sendSsePing(extra);
+      }, SSE_PING_MS);
 
       sess.pendingWaiter = {
         _id: wid,
         createdAt: Date.now(),
         resolve: (result) => {
-          clearTimeout(timer);
+          clearInterval(pingTimer);
           if (sess.pendingWaiter && sess.pendingWaiter._id === wid) {
             sess.pendingWaiter = null;
           }
@@ -173,14 +167,28 @@ class SessionManager {
     });
   }
 
+  _clearWaiter(sess, text) {
+    if (!sess.pendingWaiter) return;
+    try { sess.pendingWaiter.resolve({ content: [{ type: 'text', text }] }); } catch (e) {}
+    sess.pendingWaiter = null;
+  }
+
+  _sendSsePing(extra) {
+    if (!extra || typeof extra.sendNotification !== 'function') return;
+    try {
+      extra.sendNotification({
+        method: 'notifications/progress',
+        params: { progressToken: 0, progress: 0, total: 1 },
+      });
+    } catch (e) {}
+  }
+
   async route(text, images, msgId, targetChatKey) {
     const id = msgId || crypto.randomUUID();
-    const trace = id.substring(0, 8);
-
-    log.info('ROUTE begin', { trace, targetChatKey, textLen: text?.length ?? 0 });
+    const t = id.substring(0, 8);
 
     if (!targetChatKey) {
-      log.warn('ROUTE -> REJECTED (no targetChatKey)', { trace });
+      log.warn('ROUTE no target', { t });
       return { accepted: false, id, status: 'no_target' };
     }
 
@@ -188,76 +196,67 @@ class SessionManager {
 
     if (!sess) {
       const bound = this._findBound(targetChatKey);
-      if (bound) {
-        const MAX_QUEUED = 10;
-        if (bound.pendingMessages.length < MAX_QUEUED) {
-          bound.pendingMessages.push(buildResult(text, images));
-          this._trackDelivered(id);
-          log.info('ROUTE -> QUEUED (not looped, bound fallback)', { trace, sid: bound.shortId, chatKey: bound.chatKey, queueLen: bound.pendingMessages.length });
-          return { accepted: true, id, status: 'queued' };
-        }
+      if (bound && bound.pendingMessages.length < 10) {
+        bound.pendingMessages.push(buildResult(text, images));
+        this._trackDelivered(id);
+        log.info('ROUTE queued(bound)', { t, sid: bound.shortId, q: bound.pendingMessages.length });
+        return { accepted: true, id, status: 'queued' };
       }
-      log.info('ROUTE -> NOT_LOOPED', { trace, targetChatKey });
+      log.warn('ROUTE no session', { t, ck: targetChatKey });
       return { accepted: false, id, status: 'not_looped' };
     }
 
     if (sess.chatKey !== targetChatKey) {
-      log.error('ROUTE -> ISOLATION MISMATCH', { trace, expected: targetChatKey, actual: sess.chatKey, sid: sess.shortId });
+      log.error('ROUTE isolation', { t, want: targetChatKey, got: sess.chatKey });
       return { accepted: false, id, status: 'isolation_mismatch' };
     }
 
     let target = sess.hasWaiter ? sess : null;
 
     if (!target) {
-      log.info('ROUTE polling for waiter', { trace, sid: sess.shortId, chatKey: targetChatKey });
       target = await this._pollForWaiter(targetChatKey, ROUTE_WAIT_MAX_MS);
     }
 
     if (target && target.chatKey !== targetChatKey) {
-      log.error('ROUTE -> POLL ISOLATION BREACH', { trace, expected: targetChatKey, got: target.chatKey, sid: target.shortId });
+      log.error('ROUTE poll isolation', { t, want: targetChatKey, got: target.chatKey });
       return { accepted: false, id, status: 'isolation_breach' };
     }
 
     if (!target) {
-      const MAX_QUEUED = 10;
-      if (sess.pendingMessages.length < MAX_QUEUED) {
+      if (sess.pendingMessages.length < 10) {
         sess.pendingMessages.push(buildResult(text, images));
         this._trackDelivered(id);
-        log.info('ROUTE -> QUEUED', { trace, sid: sess.shortId, chatKey: sess.chatKey, queueLen: sess.pendingMessages.length });
+        log.info('ROUTE queued', { t, sid: sess.shortId, q: sess.pendingMessages.length });
         return { accepted: true, id, status: 'queued' };
       }
-      log.warn('ROUTE -> EXHAUSTED (queue full)', { trace, sid: sess.shortId });
+      log.warn('ROUTE full', { t, sid: sess.shortId });
       return { accepted: false, id, status: 'wait_exhausted' };
     }
 
     target.delivered++;
     target.pendingWaiter.resolve(buildResult(text, images));
     this._trackDelivered(id);
-    log.info('ROUTE -> DELIVERED', { trace, sid: target.shortId, chatKey: target.chatKey, targetChatKey });
+    log.info('ROUTE ok', { t, sid: target.shortId, ck: target.chatKey });
     return { accepted: true, id, status: 'delivered' };
   }
 
   clearLoop() {
     let count = 0;
     for (const [, s] of this.sessions) {
-      if (s.pendingWaiter) {
-        try { s.pendingWaiter.resolve({ content: [{ type: 'text', text: '/stop' }] }); } catch (e) {}
-      }
+      this._clearWaiter(s, '/stop');
       s.state = 'dead';
       count++;
     }
-    log.info('ALL LOOPS CLEARED', { count });
+    log.info('CLEAR all', { count });
     this._fire();
   }
 
   clearLoopForSession(sessionId) {
     const s = this.get(sessionId);
     if (!s) return;
-    if (s.pendingWaiter) {
-      try { s.pendingWaiter.resolve({ content: [{ type: 'text', text: '/stop' }] }); } catch (e) {}
-    }
+    this._clearWaiter(s, '/stop');
     s.state = 'dead';
-    log.info('SESSION killed', { sid: s.shortId, chatKey: s.chatKey });
+    log.info('CLEAR session', { sid: s.shortId, ck: s.chatKey });
     this._fire();
   }
 
@@ -331,7 +330,7 @@ class SessionManager {
       const tabIndex = parts[2] || '0';
       if (sessionWindowKey === oldWindowKey) {
         const newChatKey = newWindowKey + '|' + tabIndex;
-        log.info('SESSION rebind (window changed)', { sid: s.shortId, from: s.chatKey, to: newChatKey });
+        log.info('REBIND', { sid: s.shortId, to: newChatKey });
         s.chatKey = newChatKey;
         s.touch();
         count++;
@@ -402,16 +401,13 @@ class SessionManager {
   }
 
   _doHeartbeat() {
-    const arr = [...this.sessions.values()].map(s => ({
-      sid: s.shortId,
-      st: s.state,
-      ck: s.chatKey || '-',
-      w: s.hasWaiter ? 'Y' : 'N',
-      n: s.waiterCount,
-      d: s.delivered,
-      idle: Math.round(s.idleSinceMs / 1000) + 's',
-    }));
-    if (arr.length > 0) log.info('HEARTBEAT', { sessions: JSON.stringify(arr) });
+    const alive = [...this.sessions.values()].filter(s => s.isAlive);
+    if (alive.length === 0) return;
+    const summary = alive.map(s => {
+      const ck = s.chatKey ? s.chatKey.split('|').pop() + ':' + s.chatKey.split('|')[1]?.substring(0, 6) : '-';
+      return `${s.shortId}[${s.state[0]}${s.hasWaiter ? 'W' : '.'}] ck=${ck} d=${s.delivered} q=${s.pendingMessages.length} p=${s.ssePings} ${Math.round(s.idleSinceMs / 1000)}s`;
+    });
+    log.info('HB ' + summary.join(' | '));
   }
 
   _doCleanup() {
@@ -422,7 +418,7 @@ class SessionManager {
       if (s.hasWaiter || s.isLooping) continue;
       if (s.waiterCount > 0 && s.idleSinceMs < GRACE_MS) continue;
       if (s.idleSinceMs > REAP_IDLE_MS) {
-        log.info('SESSION reap', { sid: s.shortId, idleMs: s.idleSinceMs });
+        log.info('REAP', { sid: s.shortId });
         s.state = 'dead';
         toDelete.push(sid);
       }
@@ -452,16 +448,15 @@ function createMcpServer(sessionIdRef) {
   const server = new McpServer({ name: 'cursor-remote', version: '2.0.0' });
   server.tool(
     'wait_for_response',
-    'Blocks until the user sends a message from the Cursor Web remote client. Returns the message text and any attached images. On timeout returns empty string -- call again immediately to keep the loop alive.',
+    'Blocks until the user sends a message from the Cursor Web remote client. Returns the message text and any attached images. Call this in a loop -- it stays open until a message arrives.',
     {},
-    async () => manager.handleWait(sessionIdRef.id)
+    async (_args, extra) => manager.handleWait(sessionIdRef.id, extra)
   );
   return server;
 }
 
 async function handleMcpPost(req, res) {
   const sessionId = req.headers['mcp-session-id'];
-  const method = req.body?.method || 'unknown';
 
   try {
     if (sessionId && sessionId.length > 0) {
@@ -474,14 +469,14 @@ async function handleMcpPost(req, res) {
     }
 
     if ((!sessionId || sessionId.length === 0) && isInitializeRequest(req.body)) {
-      log.info('MCP INIT', { active: manager.sessions.size });
       const ref = { id: 'pending-' + crypto.randomUUID() };
+      const mcpServer = createMcpServer(ref);
 
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => crypto.randomUUID(),
         onsessioninitialized: (sid) => {
           ref.id = sid;
-          manager.create(sid, transport);
+          manager.create(sid, transport, mcpServer);
         },
       });
 
@@ -491,8 +486,7 @@ async function handleMcpPost(req, res) {
         if (sess) log.info('TRANSPORT closed', { sid: sess.shortId });
       };
 
-      const server = createMcpServer(ref);
-      await server.connect(transport);
+      await mcpServer.connect(transport);
       await transport.handleRequest(req, res, req.body);
       return;
     }
