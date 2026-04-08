@@ -162,10 +162,15 @@ class SessionManager {
       return { accepted: false, id, status: 'no_target' };
     }
 
-    const sess = this._findSession(targetChatKey);
+    let sess = this._findSession(targetChatKey);
     if (!sess) {
-      log.warn('ROUTE no session', { t, ck: targetChatKey });
-      return { accepted: false, id, status: 'no_session' };
+      sess = this._findUnbound();
+      if (sess) {
+        this.bind(sess, targetChatKey, 'late-bind-route');
+      } else {
+        log.warn('ROUTE no session', { t, ck: targetChatKey });
+        return { accepted: false, id, status: 'no_session' };
+      }
     }
 
     if (sess.chatKey !== targetChatKey) {
@@ -247,6 +252,17 @@ class SessionManager {
     for (const [, s] of this.sessions) {
       if (!s.isAlive || s.chatKey !== chatKey) continue;
       const t = s.lastWaiterAt || s.lastActivityAt || s.createdAt;
+      if (t > bestTime) { best = s; bestTime = t; }
+    }
+    return best;
+  }
+
+  _findUnbound() {
+    let best = null;
+    let bestTime = -1;
+    for (const [, s] of this.sessions) {
+      if (!s.isAlive || s.chatKey) continue;
+      const t = s.lastWaiterAt || s.createdAt;
       if (t > bestTime) { best = s; bestTime = t; }
     }
     return best;
