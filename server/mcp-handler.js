@@ -9,6 +9,8 @@ const log = createLogger('mcp');
 const SSE_PING_MS = 30_000;
 const ROUTE_POLL_MS = 200;
 const ROUTE_WAIT_MAX_MS = 60_000;
+const WAITER_MAX_AGE_MS = 120_000;
+const WAITER_REFRESH_MS = 30_000;
 const REAP_IDLE_MS = 86_400_000;
 const CLEANUP_INTERVAL_MS = 120_000;
 const HEARTBEAT_INTERVAL_MS = 120_000;
@@ -79,6 +81,7 @@ class SessionManager {
     this._getActiveChats = null;
     this._heartbeat = setInterval(() => this._doHeartbeat(), HEARTBEAT_INTERVAL_MS);
     this._cleanup = setInterval(() => this._doCleanup(), CLEANUP_INTERVAL_MS);
+    this._refresh = setInterval(() => this._refreshStaleWaiters(), WAITER_REFRESH_MS);
   }
 
   setOnWaiterChange(fn) { this._onWaiterChange = fn; }
@@ -133,6 +136,9 @@ class SessionManager {
         sess.lastResolvedAt = Date.now();
         sess.state = sess.chatKey ? 'bound' : 'unbound';
         log.info('WAIT drain', { sid: sess.shortId, ck: sess.chatKey, q: sess.pendingMessages.length });
+        // #region agent log
+        fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'mcp-handler.js:drain',message:'DRAIN queued message',data:{sid:sess.shortId,ck:sess.chatKey,remaining:sess.pendingMessages.length},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
+        // #endregion
         this._fire();
         return Promise.resolve(queued);
       }
@@ -146,6 +152,9 @@ class SessionManager {
 
     sess.state = 'waiting';
     log.info('WAIT open', { sid: sess.shortId, ck: sess.chatKey, n: sess.waiterCount });
+    // #region agent log
+    fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'mcp-handler.js:wait-open',message:'WAIT open new waiter',data:{sid:sess.shortId,ck:sess.chatKey,n:sess.waiterCount,q:sess.pendingMessages.length},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
+    // #endregion
 
     return new Promise((resolve) => {
       const wid = crypto.randomUUID();
@@ -282,13 +291,14 @@ log.info('DBG POLL-EXHAUST', { t, sid: sess.shortId, qLen: sess.pendingMessages.
     target.delivered++;
     this._trackDelivered(id);
 
-// #region agent log
     log.info('DBG PRE-RESOLVE', { t, sid: target.shortId, hasW: target.hasWaiter, pings: target.ssePings, waiterAge });
-// #endregion
 
     result._msgId = id;
     target.pendingMessages.push(result);
     target.lastResolvedMsgId = id;
+    // #region agent log
+    fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'mcp-handler.js:route-resolve',message:'ROUTE resolve attempt',data:{t,sid:target.shortId,waiterAge:Math.round(waiterAge/1000),pings:target.ssePings,qLen:target.pendingMessages.length},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
+    // #endregion
     target.pendingWaiter.resolve(result);
     log.info('ROUTE ok', { t, sid: target.shortId, ck: target.chatKey, age: Math.round(waiterAge / 1000) });
     return { accepted: true, id, status: 'delivered' };
@@ -463,6 +473,21 @@ log.info('DBG POLL-EXHAUST', { t, sid: sess.shortId, qLen: sess.pendingMessages.
       loopActive: [...this.sessions.values()].some(s => s.isLooping),
       perSession,
     });
+  }
+
+  _refreshStaleWaiters() {
+    const now = Date.now();
+    for (const [, s] of this.sessions) {
+      if (!s.pendingWaiter) continue;
+      const age = now - s.pendingWaiter.createdAt;
+      if (age > WAITER_MAX_AGE_MS) {
+        log.info('WAIT refresh', { sid: s.shortId, age: Math.round(age / 1000), q: s.pendingMessages.length });
+        // #region agent log
+        fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'mcp-handler.js:refresh',message:'REFRESH stale waiter',data:{sid:s.shortId,age:Math.round(age/1000),q:s.pendingMessages.length,pings:s.ssePings},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
+        // #endregion
+        this._clearWaiter(s, '');
+      }
+    }
   }
 
   _doHeartbeat() {
