@@ -7,7 +7,6 @@ const { createLogger } = require('./logger');
 const log = createLogger('mcp');
 
 const WAIT_KEEPALIVE_MS = 240_000;
-const WAIT_MAX_HOLD_MS = 4 * 60 * 60 * 1000;
 const ROUTE_POLL_MS = 200;
 const ROUTE_WAIT_MAX_MS = 60_000;
 const REAP_IDLE_MS = 86_400_000;
@@ -145,35 +144,23 @@ class SessionManager {
 
     return new Promise((resolve) => {
       const wid = crypto.randomUUID();
-      const startedAt = Date.now();
-      let currentTimer = null;
 
-      const arm = () => {
-        currentTimer = setTimeout(() => {
-          if (!sess.pendingWaiter || sess.pendingWaiter._id !== wid) return;
+      const timer = setTimeout(() => {
+        if (sess.pendingWaiter && sess.pendingWaiter._id === wid) {
           sess.keepalives++;
-          sess.touch();
-          const elapsed = Date.now() - startedAt;
-          log.info('WAIT keepalive (re-arm)', { sid: sess.shortId, n: sess.keepalives, elapsedMs: elapsed });
-          if (elapsed >= WAIT_MAX_HOLD_MS) {
-            sess.pendingWaiter = null;
-            sess.lastResolvedAt = Date.now();
-            sess.state = sess.chatKey ? 'bound' : 'unbound';
-            log.info('WAIT max-hold reached', { sid: sess.shortId });
-            resolve({ content: [{ type: 'text', text: '' }] });
-            return;
-          }
-          arm();
-        }, WAIT_KEEPALIVE_MS);
-      };
-
-      arm();
+          sess.pendingWaiter = null;
+          sess.lastResolvedAt = Date.now();
+          sess.state = sess.chatKey ? 'bound' : 'unbound';
+          log.info('WAIT keepalive', { sid: sess.shortId, n: sess.keepalives });
+        }
+        resolve({ content: [{ type: 'text', text: '<!-- keepalive -->' }] });
+      }, WAIT_KEEPALIVE_MS);
 
       sess.pendingWaiter = {
         _id: wid,
         createdAt: Date.now(),
         resolve: (result) => {
-          clearTimeout(currentTimer);
+          clearTimeout(timer);
           if (sess.pendingWaiter && sess.pendingWaiter._id === wid) {
             sess.pendingWaiter = null;
           }
