@@ -197,9 +197,19 @@ class SessionManager {
       return { accepted: false, id, status: 'no_target' };
     }
 
-    const sess = this._findLooped(targetChatKey);
+    let sess = this._findLooped(targetChatKey);
 
     if (!sess) {
+      const bound = this._findBound(targetChatKey);
+      if (bound) {
+        const MAX_QUEUED = 10;
+        if (bound.pendingMessages.length < MAX_QUEUED) {
+          bound.pendingMessages.push(buildResult(text, images));
+          this._trackDelivered(id);
+          log.info('ROUTE -> QUEUED (not looped, bound fallback)', { trace, sid: bound.shortId, chatKey: bound.chatKey, queueLen: bound.pendingMessages.length });
+          return { accepted: true, id, status: 'queued' };
+        }
+      }
       log.info('ROUTE -> NOT_LOOPED', { trace, targetChatKey });
       return { accepted: false, id, status: 'not_looped' };
     }
@@ -351,6 +361,18 @@ class SessionManager {
       if (!s.isLooping) continue;
       if (chatKey && s.chatKey !== chatKey) continue;
       const t = s.lastWaiterAt || s.createdAt;
+      if (t > bestTime) { best = s; bestTime = t; }
+    }
+    return best;
+  }
+
+  _findBound(chatKey) {
+    if (!chatKey) return null;
+    let best = null;
+    let bestTime = -1;
+    for (const [, s] of this.sessions) {
+      if (!s.isAlive || s.chatKey !== chatKey) continue;
+      const t = s.lastWaiterAt || s.lastActivityAt || s.createdAt;
       if (t > bestTime) { best = s; bestTime = t; }
     }
     return best;
