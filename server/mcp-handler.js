@@ -273,14 +273,17 @@ class SessionManager {
   }
 
   _findUnbound() {
-    let best = null;
-    let bestTime = -1;
+    let bestWaiter = null;
+    let bestOther = null;
     for (const [, s] of this.sessions) {
       if (!s.isAlive || s.chatKey) continue;
-      const t = s.lastWaiterAt || s.createdAt;
-      if (t > bestTime) { best = s; bestTime = t; }
+      if (s.hasWaiter || s.waiterCount > 0) {
+        if (!bestWaiter || (s.lastWaiterAt > bestWaiter.lastWaiterAt)) bestWaiter = s;
+      } else {
+        if (!bestOther || (s.createdAt > bestOther.createdAt)) bestOther = s;
+      }
     }
-    return best;
+    return bestWaiter || bestOther;
   }
 
   _tryAutoBind(sess) {
@@ -441,8 +444,10 @@ class SessionManager {
 
     for (const chat of mcpWindows) {
       if (taken.has(chat.chatKey)) continue;
-      const sess = unbound.shift();
-      if (!sess) break;
+      const waiterIdx = unbound.findIndex(s => s.hasWaiter || s.waiterCount > 0);
+      const idx = waiterIdx >= 0 ? waiterIdx : 0;
+      if (idx >= unbound.length) break;
+      const sess = unbound.splice(idx, 1)[0];
       this.bind(sess, chat.chatKey, 'rebind-cdp');
       taken.add(chat.chatKey);
     }
