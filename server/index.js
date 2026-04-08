@@ -212,21 +212,13 @@ io.on('connection', (socket) => {
       }
 
       if (type === 'send_message' && (text || (images && images.length > 0))) {
-// #region agent log
-log.info('DBG PRE-ROUTE', { targetChatKey, textLen: text?.length, hasImages: !!(images && images.length) });
-// #endregion
         const result = await mcp.resolvePendingWait(text || '', images, msgId, targetChatKey);
-// #region agent log
-log.info('DBG POST-ROUTE', { accepted: result.accepted, status: result.status, id: result.id?.substring(0, 8) });
-// #endregion
         if (result.accepted) {
           socket.emit('command:result', { commandId, ok: true, mcpResolved: true, mcpStatus: result.status, msgId: result.id });
           return;
         }
-        if (result.status === 'wait_exhausted') {
-          socket.emit('command:result', { commandId, ok: false, error: 'Agent waiter never came back after 60s' });
-          return;
-        }
+        socket.emit('command:result', { commandId, ok: false, error: 'MCP: ' + result.status });
+        return;
       }
 
       const cmdParams = { ...payload, ...(payload.params || {}) };

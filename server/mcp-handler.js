@@ -6,14 +6,13 @@ const { createLogger } = require('./logger');
 
 const log = createLogger('mcp');
 
-const SSE_PING_MS = 30_000;
-const ROUTE_POLL_MS = 200;
-const ROUTE_WAIT_MAX_MS = 60_000;
-const WAITER_MAX_AGE_MS = 120_000;
-const WAITER_REFRESH_MS = 30_000;
-const REAP_IDLE_MS = 86_400_000;
+const KEEPALIVE_MS = 240_000;
+const KEEPALIVE_TEXT = '[keepalive] No user message received. Call wait_for_response again to continue waiting.';
+const REAP_UNBOUND_MS = 600_000;
+const REAP_IDLE_MS = 1_800_000;
 const CLEANUP_INTERVAL_MS = 120_000;
 const HEARTBEAT_INTERVAL_MS = 120_000;
+const MAX_QUEUE = 10;
 const MAX_DELIVERED = 200;
 
 class Session {
@@ -22,7 +21,6 @@ class Session {
     this.shortId = id.substring(0, 8);
     this.chatKey = null;
     this.transport = null;
-    this.mcpServer = null;
     this.pendingWaiter = null;
     this.pendingMessages = [];
     this.state = 'unbound';
@@ -32,43 +30,24 @@ class Session {
     this.lastResolvedAt = 0;
     this.waiterCount = 0;
     this.delivered = 0;
-    this.ssePings = 0;
-    this.lastResolvedMsgId = null;
   }
 
-  get isAlive() {
-    return this.state !== 'dead';
-  }
-
-  get isLooping() {
-    return this.waiterCount > 0 && this.isAlive;
-  }
-
-  get hasWaiter() {
-    return this.pendingWaiter !== null;
-  }
+  get isAlive() { return this.state !== 'dead'; }
+  get isLooping() { return this.waiterCount > 0 && this.isAlive; }
+  get hasWaiter() { return this.pendingWaiter !== null; }
 
   get idleSinceMs() {
-    const ref = this.lastResolvedAt || this.lastWaiterAt || this.lastActivityAt;
-    return Date.now() - ref;
+    return Date.now() - (this.lastResolvedAt || this.lastWaiterAt || this.lastActivityAt);
   }
 
-  touch() {
-    this.lastActivityAt = Date.now();
-  }
+  touch() { this.lastActivityAt = Date.now(); }
 
   toDebug() {
     return {
-      id: this.shortId,
-      state: this.state,
-      chatKey: this.chatKey,
-      hasWaiter: this.hasWaiter,
-      waiterCount: this.waiterCount,
-      delivered: this.delivered,
-      ssePings: this.ssePings,
-      queued: this.pendingMessages.length,
-      idleSinceMs: this.idleSinceMs,
-      ageMs: Date.now() - this.createdAt,
+      id: this.shortId, state: this.state, chatKey: this.chatKey,
+      hasWaiter: this.hasWaiter, waiterCount: this.waiterCount,
+      delivered: this.delivered, queued: this.pendingMessages.length,
+      idleSinceMs: this.idleSinceMs, ageMs: Date.now() - this.createdAt,
     };
   }
 }
@@ -81,26 +60,21 @@ class SessionManager {
     this._getActiveChats = null;
     this._heartbeat = setInterval(() => this._doHeartbeat(), HEARTBEAT_INTERVAL_MS);
     this._cleanup = setInterval(() => this._doCleanup(), CLEANUP_INTERVAL_MS);
-    this._refresh = setInterval(() => this._refreshStaleWaiters(), WAITER_REFRESH_MS);
   }
 
   setOnWaiterChange(fn) { this._onWaiterChange = fn; }
   setActiveChatProvider(fn) { this._getActiveChats = fn; }
 
-  create(id, transport, mcpServer) {
+  create(id, transport) {
     const s = new Session(id);
     s.transport = transport;
-    s.mcpServer = mcpServer || null;
     this.sessions.set(id, s);
-    s.state = 'unbound';
     log.info('SESSION new', { sid: s.shortId });
     this._fire();
     return s;
   }
 
-  get(id) {
-    return this.sessions.get(id) || null;
-  }
+  get(id) { return this.sessions.get(id) || null; }
 
   bind(sess, chatKey, reason) {
     if (!chatKey || sess.chatKey === chatKey) return;
@@ -111,10 +85,10 @@ class SessionManager {
     this._fire();
   }
 
-  handleWait(sessionId, extra) {
+  handleWait(sessionId) {
     const sess = this.get(sessionId);
     if (!sess) {
-      log.error('WAIT unknown session', { sid: sessionId?.substring(0, 8) });
+      log.error('WAIT unknown', { sid: sessionId?.substring(0, 8) });
       return Promise.resolve({ content: [{ type: 'text', text: '' }] });
     }
 
@@ -125,54 +99,42 @@ class SessionManager {
     if (!sess.chatKey) this._tryAutoBind(sess);
 
     if (sess.pendingMessages.length > 0) {
-      if (sess.lastResolvedMsgId && sess.pendingMessages[0]._msgId === sess.lastResolvedMsgId) {
-        sess.pendingMessages.shift();
-        sess.lastResolvedMsgId = null;
-        log.info('WAIT dedup', { sid: sess.shortId, q: sess.pendingMessages.length });
-      }
-      if (sess.pendingMessages.length > 0) {
-        const queued = sess.pendingMessages.shift();
-        sess.delivered++;
-        sess.lastResolvedAt = Date.now();
-        sess.state = sess.chatKey ? 'bound' : 'unbound';
-        log.info('WAIT drain', { sid: sess.shortId, ck: sess.chatKey, q: sess.pendingMessages.length });
-        // #region agent log
-        fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'mcp-handler.js:drain',message:'DRAIN queued message',data:{sid:sess.shortId,ck:sess.chatKey,remaining:sess.pendingMessages.length},timestamp:Date.now(),hypothesisId:'B'})}).catch(()=>{});
-        // #endregion
-        this._fire();
-        return Promise.resolve(queued);
-      }
-      sess.lastResolvedMsgId = null;
+      const queued = sess.pendingMessages.shift();
+      sess.delivered++;
+      sess.lastResolvedAt = Date.now();
+      sess.state = sess.chatKey ? 'bound' : 'unbound';
+      log.info('WAIT drain', { sid: sess.shortId, ck: sess.chatKey, q: sess.pendingMessages.length });
+      this._fire();
+      return Promise.resolve(queued);
     }
 
     if (sess.pendingWaiter) {
-      log.warn('WAIT overwrite stale', { sid: sess.shortId });
+      log.warn('WAIT overwrite', { sid: sess.shortId });
       this._clearWaiter(sess, '');
     }
 
     sess.state = 'waiting';
     log.info('WAIT open', { sid: sess.shortId, ck: sess.chatKey, n: sess.waiterCount });
-    // #region agent log
-    fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'mcp-handler.js:wait-open',message:'WAIT open new waiter',data:{sid:sess.shortId,ck:sess.chatKey,n:sess.waiterCount,q:sess.pendingMessages.length},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
 
     return new Promise((resolve) => {
       const wid = crypto.randomUUID();
 
-      const pingTimer = setInterval(() => {
-        if (!sess.pendingWaiter || sess.pendingWaiter._id !== wid) {
-          clearInterval(pingTimer);
-          return;
+      const keepaliveTimer = setTimeout(() => {
+        if (sess.pendingWaiter && sess.pendingWaiter._id === wid) {
+          log.info('WAIT keepalive', { sid: sess.shortId, ck: sess.chatKey });
+          sess.pendingWaiter = null;
+          sess.lastResolvedAt = Date.now();
+          sess.state = sess.chatKey ? 'bound' : 'unbound';
+          resolve({ content: [{ type: 'text', text: KEEPALIVE_TEXT }] });
+          this._fire();
         }
-        sess.ssePings++;
-        this._sendSsePing(sess, extra);
-      }, SSE_PING_MS);
+      }, KEEPALIVE_MS);
 
       sess.pendingWaiter = {
         _id: wid,
         createdAt: Date.now(),
         resolve: (result) => {
-          clearInterval(pingTimer);
+          clearTimeout(keepaliveTimer);
           if (sess.pendingWaiter && sess.pendingWaiter._id === wid) {
             sess.pendingWaiter = null;
           }
@@ -189,68 +151,21 @@ class SessionManager {
     if (!sess.pendingWaiter) return;
     try { sess.pendingWaiter.resolve({ content: [{ type: 'text', text }] }); } catch (e) {}
     sess.pendingWaiter = null;
-    sess.lastResolvedMsgId = null;
   }
 
-  _sendSsePing(sess, extra) {
-    if (!extra || typeof extra.sendNotification !== 'function') return;
-    try {
-      const p = extra.sendNotification({
-        method: 'notifications/progress',
-        params: { progressToken: 0, progress: 0, total: 1 },
-      });
-// #region agent log
-      if (p && typeof p.catch === 'function') {
-        p.catch((e) => { log.info('DBG PING-FAIL', { sid: sess?.shortId, err: e?.message, p: sess?.ssePings }); });
-      }
-// #endregion
-    } catch (e) {
-// #region agent log
-      log.info('DBG PING-THROW', { sid: sess?.shortId, err: e?.message, p: sess?.ssePings });
-// #endregion
-    }
-  }
-
-  async route(text, images, msgId, targetChatKey) {
+  route(text, images, msgId, targetChatKey) {
     const id = msgId || crypto.randomUUID();
     const t = id.substring(0, 8);
-
-// #region agent log
-const _dbgSessions = [...this.sessions.values()].map(s => ({sid:s.shortId,ck:s.chatKey,alive:s.isAlive,looping:s.isLooping,hasW:s.hasWaiter,wCnt:s.waiterCount,st:s.state}));
-log.info('DBG ROUTE-ENTRY', { t, targetChatKey, sessions: JSON.stringify(_dbgSessions) });
-// #endregion
 
     if (!targetChatKey) {
       log.warn('ROUTE no target', { t });
       return { accepted: false, id, status: 'no_target' };
     }
 
-    let sess = this._findLooped(targetChatKey);
-
-// #region agent log
-log.info('DBG FIND-LOOPED', { t, found: !!sess, sid: sess?.shortId, ck: sess?.chatKey, hasW: sess?.hasWaiter, looping: sess?.isLooping });
-// #endregion
-
+    const sess = this._findSession(targetChatKey);
     if (!sess) {
-      const bound = this._findBound(targetChatKey);
-// #region agent log
-log.info('DBG FIND-BOUND', { t, found: !!bound, sid: bound?.shortId, ck: bound?.chatKey, qLen: bound?.pendingMessages?.length });
-// #endregion
-      if (bound && bound.pendingMessages.length < 10) {
-        bound.pendingMessages.push(buildResult(text, images));
-        this._trackDelivered(id);
-        log.info('ROUTE queued(bound)', { t, sid: bound.shortId, q: bound.pendingMessages.length });
-        return { accepted: true, id, status: 'queued' };
-      }
-
-      const unbound = this._findUnboundLooping();
-      if (unbound) {
-        this.bind(unbound, targetChatKey, 'late-bind-route');
-        sess = unbound;
-      } else {
-        log.warn('ROUTE no session', { t, ck: targetChatKey });
-        return { accepted: false, id, status: 'not_looped' };
-      }
+      log.warn('ROUTE no session', { t, ck: targetChatKey });
+      return { accepted: false, id, status: 'no_session' };
     }
 
     if (sess.chatKey !== targetChatKey) {
@@ -258,50 +173,26 @@ log.info('DBG FIND-BOUND', { t, found: !!bound, sid: bound?.shortId, ck: bound?.
       return { accepted: false, id, status: 'isolation_mismatch' };
     }
 
-    let target = sess.hasWaiter ? sess : null;
-
-    if (!target) {
-// #region agent log
-log.info('DBG POLL-START', { t, sid: sess.shortId, hasW: sess.hasWaiter, maxMs: ROUTE_WAIT_MAX_MS });
-// #endregion
-      target = await this._pollForWaiter(targetChatKey, ROUTE_WAIT_MAX_MS);
-    }
-
-    if (target && target.chatKey !== targetChatKey) {
-      log.error('ROUTE poll isolation', { t, want: targetChatKey, got: target.chatKey });
-      return { accepted: false, id, status: 'isolation_breach' };
-    }
-
-    if (!target) {
-// #region agent log
-log.info('DBG POLL-EXHAUST', { t, sid: sess.shortId, qLen: sess.pendingMessages.length });
-// #endregion
-      if (sess.pendingMessages.length < 10) {
-        sess.pendingMessages.push(buildResult(text, images));
-        this._trackDelivered(id);
-        log.info('ROUTE queued', { t, sid: sess.shortId, q: sess.pendingMessages.length });
-        return { accepted: true, id, status: 'queued' };
-      }
-      log.warn('ROUTE full', { t, sid: sess.shortId });
-      return { accepted: false, id, status: 'wait_exhausted' };
-    }
-
     const result = buildResult(text, images);
-    const waiterAge = target.pendingWaiter ? (Date.now() - target.pendingWaiter.createdAt) : 0;
-    target.delivered++;
+
+    if (sess.hasWaiter) {
+      sess.delivered++;
+      this._trackDelivered(id);
+      const age = Date.now() - sess.pendingWaiter.createdAt;
+      sess.pendingWaiter.resolve(result);
+      log.info('ROUTE ok', { t, sid: sess.shortId, ck: sess.chatKey, age: Math.round(age / 1000) });
+      return { accepted: true, id, status: 'delivered' };
+    }
+
+    if (sess.pendingMessages.length >= MAX_QUEUE) {
+      log.warn('ROUTE full', { t, sid: sess.shortId });
+      return { accepted: false, id, status: 'queue_full' };
+    }
+
+    sess.pendingMessages.push(result);
     this._trackDelivered(id);
-
-    log.info('DBG PRE-RESOLVE', { t, sid: target.shortId, hasW: target.hasWaiter, pings: target.ssePings, waiterAge });
-
-    result._msgId = id;
-    target.pendingMessages.push(result);
-    target.lastResolvedMsgId = id;
-    // #region agent log
-    fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'mcp-handler.js:route-resolve',message:'ROUTE resolve attempt',data:{t,sid:target.shortId,waiterAge:Math.round(waiterAge/1000),pings:target.ssePings,qLen:target.pendingMessages.length},timestamp:Date.now(),hypothesisId:'C'})}).catch(()=>{});
-    // #endregion
-    target.pendingWaiter.resolve(result);
-    log.info('ROUTE ok', { t, sid: target.shortId, ck: target.chatKey, age: Math.round(waiterAge / 1000) });
-    return { accepted: true, id, status: 'delivered' };
+    log.info('ROUTE queued', { t, sid: sess.shortId, q: sess.pendingMessages.length });
+    return { accepted: true, id, status: 'queued' };
   }
 
   clearLoop() {
@@ -348,6 +239,17 @@ log.info('DBG POLL-EXHAUST', { t, sid: sess.shortId, qLen: sess.pendingMessages.
 
   getMessageStatus(id) {
     return this.deliveredLog.find(m => m.id === id) || null;
+  }
+
+  _findSession(chatKey) {
+    let best = null;
+    let bestTime = -1;
+    for (const [, s] of this.sessions) {
+      if (!s.isAlive || s.chatKey !== chatKey) continue;
+      const t = s.lastWaiterAt || s.lastActivityAt || s.createdAt;
+      if (t > bestTime) { best = s; bestTime = t; }
+    }
+    return best;
   }
 
   _tryAutoBind(sess) {
@@ -404,54 +306,6 @@ log.info('DBG POLL-EXHAUST', { t, sid: sess.shortId, qLen: sess.pendingMessages.
     return count;
   }
 
-  _findUnboundLooping() {
-    let best = null;
-    let bestTime = -1;
-    for (const [, s] of this.sessions) {
-      if (!s.isLooping || s.chatKey) continue;
-      const t = s.lastWaiterAt || s.createdAt;
-      if (t > bestTime) { best = s; bestTime = t; }
-    }
-    return best;
-  }
-
-  _findLooped(chatKey) {
-    let best = null;
-    let bestTime = -1;
-    for (const [, s] of this.sessions) {
-      if (!s.isLooping) continue;
-      if (chatKey && s.chatKey !== chatKey) continue;
-      const t = s.lastWaiterAt || s.createdAt;
-      if (t > bestTime) { best = s; bestTime = t; }
-    }
-    return best;
-  }
-
-  _findBound(chatKey) {
-    if (!chatKey) return null;
-    let best = null;
-    let bestTime = -1;
-    for (const [, s] of this.sessions) {
-      if (!s.isAlive || s.chatKey !== chatKey) continue;
-      const t = s.lastWaiterAt || s.lastActivityAt || s.createdAt;
-      if (t > bestTime) { best = s; bestTime = t; }
-    }
-    return best;
-  }
-
-  _pollForWaiter(chatKey, maxMs) {
-    return new Promise((resolve) => {
-      const start = Date.now();
-      const tick = () => {
-        const s = this._findLooped(chatKey);
-        if (s && s.hasWaiter) return resolve(s);
-        if (Date.now() - start >= maxMs) return resolve(null);
-        setTimeout(tick, ROUTE_POLL_MS);
-      };
-      tick();
-    });
-  }
-
   _trackDelivered(id) {
     this.deliveredLog.push({ id, at: Date.now() });
     if (this.deliveredLog.length > MAX_DELIVERED) this.deliveredLog.shift();
@@ -475,40 +329,29 @@ log.info('DBG POLL-EXHAUST', { t, sid: sess.shortId, qLen: sess.pendingMessages.
     });
   }
 
-  _refreshStaleWaiters() {
-    const now = Date.now();
-    for (const [, s] of this.sessions) {
-      if (!s.pendingWaiter) continue;
-      const age = now - s.pendingWaiter.createdAt;
-      if (age > WAITER_MAX_AGE_MS) {
-        log.info('WAIT refresh', { sid: s.shortId, age: Math.round(age / 1000), q: s.pendingMessages.length });
-        // #region agent log
-        fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'mcp-handler.js:refresh',message:'REFRESH stale waiter',data:{sid:s.shortId,age:Math.round(age/1000),q:s.pendingMessages.length,pings:s.ssePings},timestamp:Date.now(),hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
-        this._clearWaiter(s, '');
-      }
-    }
-  }
-
   _doHeartbeat() {
     const alive = [...this.sessions.values()].filter(s => s.isAlive);
     if (alive.length === 0) return;
     const summary = alive.map(s => {
       const ck = s.chatKey ? s.chatKey.split('|').pop() + ':' + s.chatKey.split('|')[1]?.substring(0, 6) : '-';
-      return `${s.shortId}[${s.state[0]}${s.hasWaiter ? 'W' : '.'}] ck=${ck} d=${s.delivered} q=${s.pendingMessages.length} p=${s.ssePings} ${Math.round(s.idleSinceMs / 1000)}s`;
+      return `${s.shortId}[${s.state[0]}${s.hasWaiter ? 'W' : '.'}] ck=${ck} d=${s.delivered} q=${s.pendingMessages.length} ${Math.round(s.idleSinceMs / 1000)}s`;
     });
     log.info('HB ' + summary.join(' | '));
   }
 
   _doCleanup() {
     const toDelete = [];
-    const GRACE_MS = 300_000;
     for (const [sid, s] of this.sessions) {
       if (s.state === 'dead') { toDelete.push(sid); continue; }
       if (s.hasWaiter || s.isLooping) continue;
-      if (s.waiterCount > 0 && s.idleSinceMs < GRACE_MS) continue;
+      if (!s.chatKey && s.idleSinceMs > REAP_UNBOUND_MS) {
+        log.info('REAP unbound', { sid: s.shortId });
+        s.state = 'dead';
+        toDelete.push(sid);
+        continue;
+      }
       if (s.idleSinceMs > REAP_IDLE_MS) {
-        log.info('REAP', { sid: s.shortId });
+        log.info('REAP idle', { sid: s.shortId, ck: s.chatKey });
         s.state = 'dead';
         toDelete.push(sid);
       }
@@ -538,9 +381,9 @@ function createMcpServer(sessionIdRef) {
   const server = new McpServer({ name: 'cursor-remote', version: '2.0.0' });
   server.tool(
     'wait_for_response',
-    'Blocks until the user sends a message from the Cursor Web remote client. Returns the message text and any attached images. Call this in a loop -- it stays open until a message arrives.',
+    'Blocks until the user sends a message from the Cursor Web remote client. Returns the message text and any attached images. Call this in a loop -- it stays open until a message arrives or returns a keepalive after 4 minutes.',
     {},
-    async (_args, extra) => manager.handleWait(sessionIdRef.id, extra)
+    async () => manager.handleWait(sessionIdRef.id)
   );
   return server;
 }
@@ -566,16 +409,13 @@ async function handleMcpPost(req, res) {
         sessionIdGenerator: () => crypto.randomUUID(),
         onsessioninitialized: (sid) => {
           ref.id = sid;
-          manager.create(sid, transport, mcpServer);
+          manager.create(sid, transport);
         },
       });
 
       transport.onclose = () => {
         const sid = transport.sessionId || ref.id;
         const sess = manager.get(sid);
-// #region agent log
-        log.info('DBG TRANSPORT-CLOSE', { sid: sess?.shortId, hadWaiter: sess?.hasWaiter, state: sess?.state, pings: sess?.ssePings });
-// #endregion
         if (sess) log.info('TRANSPORT closed', { sid: sess.shortId });
       };
 

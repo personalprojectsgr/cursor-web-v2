@@ -18,24 +18,31 @@ The only MCP tool exposed. It blocks until the user sends a message from the web
 
 ### Loop Mechanism
 
-1. Agent calls `wait_for_response` → server blocks for up to 240 seconds
+1. Agent calls `wait_for_response` → server holds for up to 4 minutes
 2. If user sends a message → resolve immediately with message content (text + optional images)
-3. If 240s expires with no message → return empty string (keepalive)
-4. Agent sees empty string → immediately calls `wait_for_response` again
-5. This creates an "infinite" loop that only stops when the user sends `/stop` or the agent is manually stopped
+3. If 4 minutes pass with no message → return keepalive text: `[keepalive] No user message received. Call wait_for_response again to continue waiting.`
+4. Agent sees keepalive → immediately calls `wait_for_response` again (enforced by Cursor rules)
+5. This creates an infinite loop that only stops when the user sends `/stop`
+
+### Why 4 Minutes?
+
+- Railway has a hard 15-minute HTTP request timeout — 4 minutes gives safe margin
+- Cursor's MCP tool timeout defaults to 60s but is configurable — 4 minutes works with extended settings
+- Every 4 minutes, the agent gets a fresh HTTP/SSE connection — no stale stream issues
+- Worst-case message delivery latency is 4 minutes (message arrives right after keepalive)
 
 ### Session Lifecycle
 
 ```
 MCP INIT (POST /mcp) → session created (unbound)
   ↓
-wait_for_response called → session becomes "waiting"
-  ↓
-User sends message via web client → message routed to session → resolved
-  ↓
-Agent processes message, calls wait_for_response again → "waiting"
-  ↓
-... repeat ...
+wait_for_response called → auto-bind to a chat via CDP state → session "waiting"
+  ↓ (4min keepalive)            ↓ (user message)
+return keepalive text           return message content
+  ↓                             ↓
+agent calls again               agent processes, calls again
+  ↓                             ↓
+... repeat ...                  ... repeat ...
 ```
 
 ### Session Binding (chatKey)
@@ -46,7 +53,22 @@ Sessions auto-bind to a specific chat: `chatKey = machineKey|windowKey|tabIndex`
 - `windowKey`: CDP target/window identifier
 - `tabIndex`: The chat tab index within Cursor IDE (0, 1, 2, etc.)
 
-Binding happens on first `resolvePendingWait` call -- the session that's waiting gets bound to the chatKey of the message sender.
+Binding happens on first `wait_for_response` call via auto-bind from active CDP windows.
+
+### Message Routing
+
+When the web client sends a message:
+1. Socket.IO emits `phone:command` with `type: "send_message"`
+2. Server calls `route(text, images, msgId, targetChatKey)`
+3. If session has an active waiter → resolve immediately (instant delivery)
+4. If session exists but no waiter → queue the message (max 10)
+5. Queued messages are drained on the next `wait_for_response` call
+
+### Session Cleanup
+
+- Unbound sessions with no activity: reaped after 10 minutes
+- Bound sessions with no activity: reaped after 30 minutes
+- Dead sessions: removed on next cleanup cycle (every 2 minutes)
 
 ### MCP Config Location
 
@@ -64,15 +86,6 @@ Binding happens on first `resolvePendingWait` call -- the session that's waiting
 
 For local development, change to `http://localhost:3000/mcp`.
 
-### Message Routing (resolvePendingWait)
-
-When the web client sends a message:
-1. Socket.IO emits `phone:command` with `type: "send_message"`
-2. Server calls `mcp.resolvePendingWait(text, images, msgId, targetChatKey)`
-3. `resolvePendingWait` finds a waiting session (preferring one bound to `targetChatKey`)
-4. Resolves the pending promise → agent receives the message
-5. If no waiting session found, message is queued for up to 10 seconds
-
 ### Heartbeat
 
-Every 60 seconds, the MCP handler logs all active sessions with their state, chatKey, wait count, and idle time. Sessions idle for 30+ minutes with no waiter are cleaned up.
+Every 2 minutes, the MCP handler logs all active sessions with state, chatKey, delivered count, queue depth, and idle time.

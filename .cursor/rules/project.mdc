@@ -41,8 +41,8 @@ Cursor IDE (localhost:9222 CDP)
 ### MCP Session Model
 
 Sessions are per-chat, identified by `chatKey = machineKey|windowKey|tabIndex`.
-States: unbound → bound → waiting → (delivered) → bound → waiting → ...
-The agent calls `wait_for_response` in a loop. Each call blocks for up to 240s (keepalive), then returns empty string so the agent re-calls immediately.
+States: unbound → bound → waiting → (keepalive/delivered) → bound → waiting → ...
+The agent calls `wait_for_response` in a loop. Each call blocks for up to 4 minutes. If no user message arrives, it returns a keepalive text so the agent re-calls immediately with a fresh connection.
 
 ## Important: Railway vs Local
 
