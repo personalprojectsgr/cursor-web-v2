@@ -179,25 +179,33 @@ class SessionManager {
 
     log.info('ROUTE begin', { trace, targetChatKey, textLen: text?.length ?? 0 });
 
-    let sess = this._findLooped(targetChatKey);
-
-    if (!sess && targetChatKey) {
-      sess = this._findLooped(null);
-      if (sess) {
-        log.info('ROUTE cross-bind', { trace, from: sess.chatKey, to: targetChatKey, sid: sess.shortId });
-      }
+    if (!targetChatKey) {
+      log.warn('ROUTE -> REJECTED (no targetChatKey)', { trace });
+      return { accepted: false, id, status: 'no_target' };
     }
+
+    const sess = this._findLooped(targetChatKey);
 
     if (!sess) {
       log.info('ROUTE -> NOT_LOOPED', { trace, targetChatKey });
       return { accepted: false, id, status: 'not_looped' };
     }
 
+    if (sess.chatKey !== targetChatKey) {
+      log.error('ROUTE -> ISOLATION MISMATCH', { trace, expected: targetChatKey, actual: sess.chatKey, sid: sess.shortId });
+      return { accepted: false, id, status: 'isolation_mismatch' };
+    }
+
     let target = sess.hasWaiter ? sess : null;
 
     if (!target) {
-      log.info('ROUTE polling for waiter', { trace, sid: sess.shortId });
-      target = await this._pollForWaiter(targetChatKey || (sess.chatKey), ROUTE_WAIT_MAX_MS);
+      log.info('ROUTE polling for waiter', { trace, sid: sess.shortId, chatKey: targetChatKey });
+      target = await this._pollForWaiter(targetChatKey, ROUTE_WAIT_MAX_MS);
+    }
+
+    if (target && target.chatKey !== targetChatKey) {
+      log.error('ROUTE -> POLL ISOLATION BREACH', { trace, expected: targetChatKey, got: target.chatKey, sid: target.shortId });
+      return { accepted: false, id, status: 'isolation_breach' };
     }
 
     if (!target) {
@@ -215,7 +223,7 @@ class SessionManager {
     target.delivered++;
     target.pendingWaiter.resolve(buildResult(text, images));
     this._trackDelivered(id);
-    log.info('ROUTE -> DELIVERED', { trace, sid: target.shortId, chatKey: target.chatKey });
+    log.info('ROUTE -> DELIVERED', { trace, sid: target.shortId, chatKey: target.chatKey, targetChatKey });
     return { accepted: true, id, status: 'delivered' };
   }
 

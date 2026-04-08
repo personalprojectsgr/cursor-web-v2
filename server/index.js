@@ -206,6 +206,10 @@ io.on('connection', (socket) => {
       const resolvedTabIndex = typeof chatTabIndex === 'number' ? chatTabIndex : 0;
       const targetChatKey = targetWindowKey ? (targetWindowKey + '|' + resolvedTabIndex) : null;
 
+      if (type === 'send_message') {
+        log.info('PHONE send_message', { targetWindowKey, chatTabIndex: resolvedTabIndex, targetChatKey, textLen: text?.length ?? 0 });
+      }
+
       if (type === 'send_message' && (text || (images && images.length > 0))) {
         const result = await mcp.resolvePendingWait(text || '', images, msgId, targetChatKey);
         if (result.accepted) {
@@ -213,7 +217,7 @@ io.on('connection', (socket) => {
           return;
         }
         if (result.status === 'wait_exhausted') {
-          socket.emit('command:result', { commandId, ok: false, error: 'Agent waiter never came back after 30s' });
+          socket.emit('command:result', { commandId, ok: false, error: 'Agent waiter never came back after 60s' });
           return;
         }
       }
