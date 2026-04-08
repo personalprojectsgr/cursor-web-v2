@@ -296,7 +296,7 @@ class SessionManager {
     }
 
     const isMcpActive = (c) =>
-      c.activeMcp && c.activeMcp.toolName === 'wait_for_response' && c.activeMcp.serverName === 'cursor-remote';
+      c.activeMcp && c.activeMcp.toolName && /wait.for.response/i.test(c.activeMcp.toolName);
 
     const cdpSummary = active.map(c => ({
       ck: c.chatKey.split('|').slice(1).join('|').substring(0, 12),
@@ -384,7 +384,7 @@ class SessionManager {
     if (!active || active.length === 0) return;
 
     const isMcpActive = (c) =>
-      c.activeMcp && c.activeMcp.toolName === 'wait_for_response' && c.activeMcp.serverName === 'cursor-remote';
+      c.activeMcp && c.activeMcp.toolName && /wait.for.response/i.test(c.activeMcp.toolName);
 
     const aliveSessions = [...this.sessions.values()].filter(s => s.isAlive);
     const unbound = aliveSessions.filter(s => !s.chatKey);
