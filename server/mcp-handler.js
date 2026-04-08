@@ -8,6 +8,7 @@ const log = createLogger('mcp');
 
 const KEEPALIVE_MS = 240_000;
 const KEEPALIVE_TEXT = '[keepalive] No user message received. Call wait_for_response again to continue waiting.';
+const REBIND_INTERVAL_MS = 10_000;
 const REAP_UNBOUND_MS = 600_000;
 const REAP_IDLE_MS = 1_800_000;
 const CLEANUP_INTERVAL_MS = 120_000;
@@ -60,6 +61,7 @@ class SessionManager {
     this._getActiveChats = null;
     this._heartbeat = setInterval(() => this._doHeartbeat(), HEARTBEAT_INTERVAL_MS);
     this._cleanup = setInterval(() => this._doCleanup(), CLEANUP_INTERVAL_MS);
+    this._rebinder = setInterval(() => this._doRebindUnbound(), REBIND_INTERVAL_MS);
   }
 
   setOnWaiterChange(fn) { this._onWaiterChange = fn; }
@@ -280,11 +282,18 @@ class SessionManager {
       if (s.chatKey && s.isAlive && sid !== sess.id) taken.add(s.chatKey);
     }
 
-    for (const chat of active) {
-      if (!taken.has(chat.chatKey)) {
-        this.bind(sess, chat.chatKey, 'auto-bind');
-        return;
-      }
+    const isMcpActive = (c) =>
+      c.activeMcp && c.activeMcp.toolName === 'wait_for_response' && c.activeMcp.serverName === 'cursor-remote';
+
+    const mcpMatch = active.find(c => !taken.has(c.chatKey) && isMcpActive(c));
+    if (mcpMatch) {
+      this.bind(sess, mcpMatch.chatKey, 'auto-bind-mcp');
+      return;
+    }
+
+    const available = active.filter(c => !taken.has(c.chatKey));
+    if (available.length === 1) {
+      this.bind(sess, available[0].chatKey, 'auto-bind-only');
     }
   }
 
@@ -343,6 +352,32 @@ class SessionManager {
       loopActive: [...this.sessions.values()].some(s => s.isLooping),
       perSession,
     });
+  }
+
+  _doRebindUnbound() {
+    if (!this._getActiveChats) return;
+
+    const unbound = [...this.sessions.values()].filter(s => s.isAlive && !s.chatKey);
+    if (unbound.length === 0) return;
+
+    const active = this._getActiveChats();
+    if (!active || active.length === 0) return;
+
+    const taken = new Set();
+    for (const [, s] of this.sessions) {
+      if (s.chatKey && s.isAlive) taken.add(s.chatKey);
+    }
+
+    const isMcpActive = (c) =>
+      c.activeMcp && c.activeMcp.toolName === 'wait_for_response' && c.activeMcp.serverName === 'cursor-remote';
+
+    for (const chat of active) {
+      if (taken.has(chat.chatKey) || !isMcpActive(chat)) continue;
+      const sess = unbound.shift();
+      if (!sess) break;
+      this.bind(sess, chat.chatKey, 'rebind-cdp');
+      taken.add(chat.chatKey);
+    }
   }
 
   _doHeartbeat() {

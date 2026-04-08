@@ -40,7 +40,13 @@ mcp.setActiveChatProvider(() => {
     const tabs = (state && state.chatTabs) || [{ title: state?.chatTitle || 'Chat', isActive: true }];
     tabs.forEach((tab, i) => {
       if (tab.isActive) {
-        result.push({ chatKey: wKey + '|' + i, windowKey: wKey, tabIndex: i, title: tab.title });
+        result.push({
+          chatKey: wKey + '|' + i,
+          windowKey: wKey,
+          tabIndex: i,
+          title: tab.title,
+          activeMcp: state?.activeMcp || null,
+        });
       }
     });
   }
