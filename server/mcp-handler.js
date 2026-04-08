@@ -233,8 +233,15 @@ log.info('DBG FIND-BOUND', { t, found: !!bound, sid: bound?.shortId, ck: bound?.
         log.info('ROUTE queued(bound)', { t, sid: bound.shortId, q: bound.pendingMessages.length });
         return { accepted: true, id, status: 'queued' };
       }
-      log.warn('ROUTE no session', { t, ck: targetChatKey });
-      return { accepted: false, id, status: 'not_looped' };
+
+      const unbound = this._findUnboundLooping();
+      if (unbound) {
+        this.bind(unbound, targetChatKey, 'late-bind-route');
+        sess = unbound;
+      } else {
+        log.warn('ROUTE no session', { t, ck: targetChatKey });
+        return { accepted: false, id, status: 'not_looped' };
+      }
     }
 
     if (sess.chatKey !== targetChatKey) {
@@ -385,6 +392,17 @@ log.info('DBG POLL-EXHAUST', { t, sid: sess.shortId, qLen: sess.pendingMessages.
     }
     if (count > 0) this._fire();
     return count;
+  }
+
+  _findUnboundLooping() {
+    let best = null;
+    let bestTime = -1;
+    for (const [, s] of this.sessions) {
+      if (!s.isLooping || s.chatKey) continue;
+      const t = s.lastWaiterAt || s.createdAt;
+      if (t > bestTime) { best = s; bestTime = t; }
+    }
+    return best;
   }
 
   _findLooped(chatKey) {
