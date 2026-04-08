@@ -164,10 +164,23 @@ class SessionManager {
       return { accepted: false, id, status: 'no_target' };
     }
 
+    const allAlive = [...this.sessions.values()].filter(s => s.isAlive);
+    log.info('ROUTE pipeline', {
+      t,
+      target: targetChatKey.split('|').slice(1).join('|').substring(0, 15),
+      sessions: allAlive.map(s => ({
+        sid: s.shortId,
+        ck: s.chatKey ? s.chatKey.split('|').slice(1).join('|').substring(0, 12) : '-',
+        w: s.hasWaiter,
+        d: s.delivered,
+      })),
+    });
+
     let sess = this._findSession(targetChatKey);
     if (!sess) {
       sess = this._findUnbound();
       if (sess) {
+        log.info('ROUTE late-bind', { t, sid: sess.shortId, target: targetChatKey.split('|').slice(1).join('|').substring(0, 15) });
         this.bind(sess, targetChatKey, 'late-bind-route');
       } else {
         log.warn('ROUTE no session', { t, ck: targetChatKey });
@@ -285,6 +298,14 @@ class SessionManager {
     const isMcpActive = (c) =>
       c.activeMcp && c.activeMcp.toolName === 'wait_for_response' && c.activeMcp.serverName === 'cursor-remote';
 
+    const cdpSummary = active.map(c => ({
+      ck: c.chatKey.split('|').slice(1).join('|').substring(0, 12),
+      title: (c.title || '').substring(0, 30),
+      mcp: c.activeMcp ? c.activeMcp.toolName + '@' + c.activeMcp.serverName : 'none',
+      taken: taken.has(c.chatKey),
+    }));
+    log.info('AUTOBIND attempt', { sid: sess.shortId, chats: cdpSummary });
+
     const mcpMatch = active.find(c => !taken.has(c.chatKey) && isMcpActive(c));
     if (mcpMatch) {
       this.bind(sess, mcpMatch.chatKey, 'auto-bind-mcp');
@@ -294,6 +315,8 @@ class SessionManager {
     const available = active.filter(c => !taken.has(c.chatKey));
     if (available.length === 1) {
       this.bind(sess, available[0].chatKey, 'auto-bind-only');
+    } else {
+      log.info('AUTOBIND deferred', { sid: sess.shortId, available: available.length, reason: 'ambiguous-no-cdp' });
     }
   }
 
@@ -357,22 +380,67 @@ class SessionManager {
   _doRebindUnbound() {
     if (!this._getActiveChats) return;
 
-    const unbound = [...this.sessions.values()].filter(s => s.isAlive && !s.chatKey);
-    if (unbound.length === 0) return;
-
     const active = this._getActiveChats();
     if (!active || active.length === 0) return;
-
-    const taken = new Set();
-    for (const [, s] of this.sessions) {
-      if (s.chatKey && s.isAlive) taken.add(s.chatKey);
-    }
 
     const isMcpActive = (c) =>
       c.activeMcp && c.activeMcp.toolName === 'wait_for_response' && c.activeMcp.serverName === 'cursor-remote';
 
-    for (const chat of active) {
-      if (taken.has(chat.chatKey) || !isMcpActive(chat)) continue;
+    const aliveSessions = [...this.sessions.values()].filter(s => s.isAlive);
+    const unbound = aliveSessions.filter(s => !s.chatKey);
+
+    const mcpWindows = active.filter(isMcpActive);
+    if (mcpWindows.length > 0 && (unbound.length > 0 || aliveSessions.length > 1)) {
+      log.info('REBIND scan', {
+        unbound: unbound.length,
+        alive: aliveSessions.length,
+        mcpWindows: mcpWindows.map(c => ({
+          ck: c.chatKey.split('|').slice(1).join('|').substring(0, 12),
+          title: (c.title || '').substring(0, 30),
+        })),
+        boundTo: aliveSessions.filter(s => s.chatKey).map(s => ({
+          sid: s.shortId,
+          ck: s.chatKey.split('|').slice(1).join('|').substring(0, 12),
+        })),
+      });
+    }
+
+    const sessionByChatKey = new Map();
+    for (const s of aliveSessions) {
+      if (s.chatKey) sessionByChatKey.set(s.chatKey, s);
+    }
+
+    const mcpChatKeys = new Set(mcpWindows.map(c => c.chatKey));
+
+    for (const s of aliveSessions) {
+      if (!s.chatKey) continue;
+      if (mcpChatKeys.has(s.chatKey)) continue;
+
+      const hasUnboundWithMcp = unbound.length > 0 && mcpWindows.some(c => !sessionByChatKey.has(c.chatKey));
+      if (!hasUnboundWithMcp) continue;
+
+      const correctChat = mcpWindows.find(c => !sessionByChatKey.has(c.chatKey));
+      if (correctChat) {
+        log.warn('REBIND mismatch', {
+          sid: s.shortId,
+          wasBound: s.chatKey.split('|').slice(1).join('|').substring(0, 12),
+          shouldBe: correctChat.chatKey.split('|').slice(1).join('|').substring(0, 12),
+          title: (correctChat.title || '').substring(0, 30),
+        });
+        sessionByChatKey.delete(s.chatKey);
+        s.chatKey = null;
+        s.state = 'unbound';
+        unbound.push(s);
+      }
+    }
+
+    const taken = new Set();
+    for (const s of aliveSessions) {
+      if (s.chatKey) taken.add(s.chatKey);
+    }
+
+    for (const chat of mcpWindows) {
+      if (taken.has(chat.chatKey)) continue;
       const sess = unbound.shift();
       if (!sess) break;
       this.bind(sess, chat.chatKey, 'rebind-cdp');
