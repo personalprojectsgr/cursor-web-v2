@@ -31,6 +31,7 @@ class Session {
     this.waiterCount = 0;
     this.delivered = 0;
     this.ssePings = 0;
+    this.lastResolvedMsgId = null;
   }
 
   get isAlive() {
@@ -121,13 +122,21 @@ class SessionManager {
     if (!sess.chatKey) this._tryAutoBind(sess);
 
     if (sess.pendingMessages.length > 0) {
-      const queued = sess.pendingMessages.shift();
-      sess.delivered++;
-      sess.lastResolvedAt = Date.now();
-      sess.state = sess.chatKey ? 'bound' : 'unbound';
-      log.info('WAIT drain', { sid: sess.shortId, ck: sess.chatKey, q: sess.pendingMessages.length });
-      this._fire();
-      return Promise.resolve(queued);
+      if (sess.lastResolvedMsgId && sess.pendingMessages[0]._msgId === sess.lastResolvedMsgId) {
+        sess.pendingMessages.shift();
+        sess.lastResolvedMsgId = null;
+        log.info('WAIT dedup', { sid: sess.shortId, q: sess.pendingMessages.length });
+      }
+      if (sess.pendingMessages.length > 0) {
+        const queued = sess.pendingMessages.shift();
+        sess.delivered++;
+        sess.lastResolvedAt = Date.now();
+        sess.state = sess.chatKey ? 'bound' : 'unbound';
+        log.info('WAIT drain', { sid: sess.shortId, ck: sess.chatKey, q: sess.pendingMessages.length });
+        this._fire();
+        return Promise.resolve(queued);
+      }
+      sess.lastResolvedMsgId = null;
     }
 
     if (sess.pendingWaiter) {
@@ -171,6 +180,7 @@ class SessionManager {
     if (!sess.pendingWaiter) return;
     try { sess.pendingWaiter.resolve({ content: [{ type: 'text', text }] }); } catch (e) {}
     sess.pendingWaiter = null;
+    sess.lastResolvedMsgId = null;
   }
 
   _sendSsePing(sess, extra) {
@@ -260,13 +270,20 @@ log.info('DBG POLL-EXHAUST', { t, sid: sess.shortId, qLen: sess.pendingMessages.
       return { accepted: false, id, status: 'wait_exhausted' };
     }
 
+    const result = buildResult(text, images);
+    const waiterAge = target.pendingWaiter ? (Date.now() - target.pendingWaiter.createdAt) : 0;
     target.delivered++;
-// #region agent log
-    log.info('DBG PRE-RESOLVE', { t, sid: target.shortId, hasW: target.hasWaiter, pings: target.ssePings, waiterAge: target.pendingWaiter ? (Date.now() - target.pendingWaiter.createdAt) : -1 });
-// #endregion
-    target.pendingWaiter.resolve(buildResult(text, images));
     this._trackDelivered(id);
-    log.info('ROUTE ok', { t, sid: target.shortId, ck: target.chatKey });
+
+// #region agent log
+    log.info('DBG PRE-RESOLVE', { t, sid: target.shortId, hasW: target.hasWaiter, pings: target.ssePings, waiterAge });
+// #endregion
+
+    result._msgId = id;
+    target.pendingMessages.push(result);
+    target.lastResolvedMsgId = id;
+    target.pendingWaiter.resolve(result);
+    log.info('ROUTE ok', { t, sid: target.shortId, ck: target.chatKey, age: Math.round(waiterAge / 1000) });
     return { accepted: true, id, status: 'delivered' };
   }
 
