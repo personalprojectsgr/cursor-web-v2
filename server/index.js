@@ -212,7 +212,13 @@ io.on('connection', (socket) => {
       }
 
       if (type === 'send_message' && (text || (images && images.length > 0))) {
+// #region agent log
+fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'index.js:214',message:'PRE resolvePendingWait',data:{targetChatKey,textLen:text?.length,hasImages:!!(images&&images.length)},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+// #endregion
         const result = await mcp.resolvePendingWait(text || '', images, msgId, targetChatKey);
+// #region agent log
+fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'index.js:216',message:'POST resolvePendingWait',data:{accepted:result.accepted,status:result.status,id:result.id},timestamp:Date.now(),hypothesisId:'H2H5'})}).catch(()=>{});
+// #endregion
         if (result.accepted) {
           socket.emit('command:result', { commandId, ok: true, mcpResolved: true, mcpStatus: result.status, msgId: result.id });
           return;

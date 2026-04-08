@@ -187,6 +187,11 @@ class SessionManager {
     const id = msgId || crypto.randomUUID();
     const t = id.substring(0, 8);
 
+// #region agent log
+const _dbgSessions = [...this.sessions.values()].map(s => ({sid:s.shortId,ck:s.chatKey,alive:s.isAlive,looping:s.isLooping,hasW:s.hasWaiter,wCnt:s.waiterCount,st:s.state}));
+fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'mcp-handler.js:route-entry',message:'ROUTE entry',data:{t,targetChatKey,sessions:_dbgSessions},timestamp:Date.now(),hypothesisId:'H1H4'})}).catch(()=>{});
+// #endregion
+
     if (!targetChatKey) {
       log.warn('ROUTE no target', { t });
       return { accepted: false, id, status: 'no_target' };
@@ -194,8 +199,15 @@ class SessionManager {
 
     let sess = this._findLooped(targetChatKey);
 
+// #region agent log
+fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'mcp-handler.js:route-findLooped',message:'findLooped result',data:{t,found:!!sess,sid:sess?.shortId,ck:sess?.chatKey,hasW:sess?.hasWaiter,looping:sess?.isLooping},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+// #endregion
+
     if (!sess) {
       const bound = this._findBound(targetChatKey);
+// #region agent log
+fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'mcp-handler.js:route-findBound',message:'findBound result',data:{t,found:!!bound,sid:bound?.shortId,ck:bound?.chatKey,qLen:bound?.pendingMessages?.length},timestamp:Date.now(),hypothesisId:'H4'})}).catch(()=>{});
+// #endregion
       if (bound && bound.pendingMessages.length < 10) {
         bound.pendingMessages.push(buildResult(text, images));
         this._trackDelivered(id);
@@ -214,6 +226,9 @@ class SessionManager {
     let target = sess.hasWaiter ? sess : null;
 
     if (!target) {
+// #region agent log
+fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'mcp-handler.js:route-poll-start',message:'polling for waiter',data:{t,sid:sess.shortId,hasW:sess.hasWaiter,maxMs:ROUTE_WAIT_MAX_MS},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+// #endregion
       target = await this._pollForWaiter(targetChatKey, ROUTE_WAIT_MAX_MS);
     }
 
@@ -223,6 +238,9 @@ class SessionManager {
     }
 
     if (!target) {
+// #region agent log
+fetch('http://127.0.0.1:7793/ingest/0ff6b19b-66bd-46e6-8794-6351cffa8ca4',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'d88471'},body:JSON.stringify({sessionId:'d88471',location:'mcp-handler.js:route-no-target',message:'poll exhausted or queue',data:{t,sid:sess.shortId,qLen:sess.pendingMessages.length},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+// #endregion
       if (sess.pendingMessages.length < 10) {
         sess.pendingMessages.push(buildResult(text, images));
         this._trackDelivered(id);
