@@ -147,7 +147,7 @@ class SessionManager {
           return;
         }
         sess.ssePings++;
-        this._sendSsePing(extra);
+        this._sendSsePing(sess, extra);
       }, SSE_PING_MS);
 
       sess.pendingWaiter = {
@@ -173,14 +173,23 @@ class SessionManager {
     sess.pendingWaiter = null;
   }
 
-  _sendSsePing(extra) {
+  _sendSsePing(sess, extra) {
     if (!extra || typeof extra.sendNotification !== 'function') return;
     try {
-      extra.sendNotification({
+      const p = extra.sendNotification({
         method: 'notifications/progress',
         params: { progressToken: 0, progress: 0, total: 1 },
       });
-    } catch (e) {}
+// #region agent log
+      if (p && typeof p.catch === 'function') {
+        p.catch((e) => { log.info('DBG PING-FAIL', { sid: sess?.shortId, err: e?.message, p: sess?.ssePings }); });
+      }
+// #endregion
+    } catch (e) {
+// #region agent log
+      log.info('DBG PING-THROW', { sid: sess?.shortId, err: e?.message, p: sess?.ssePings });
+// #endregion
+    }
   }
 
   async route(text, images, msgId, targetChatKey) {
@@ -252,6 +261,9 @@ log.info('DBG POLL-EXHAUST', { t, sid: sess.shortId, qLen: sess.pendingMessages.
     }
 
     target.delivered++;
+// #region agent log
+    log.info('DBG PRE-RESOLVE', { t, sid: target.shortId, hasW: target.hasWaiter, pings: target.ssePings, waiterAge: target.pendingWaiter ? (Date.now() - target.pendingWaiter.createdAt) : -1 });
+// #endregion
     target.pendingWaiter.resolve(buildResult(text, images));
     this._trackDelivered(id);
     log.info('ROUTE ok', { t, sid: target.shortId, ck: target.chatKey });
@@ -501,6 +513,9 @@ async function handleMcpPost(req, res) {
       transport.onclose = () => {
         const sid = transport.sessionId || ref.id;
         const sess = manager.get(sid);
+// #region agent log
+        log.info('DBG TRANSPORT-CLOSE', { sid: sess?.shortId, hadWaiter: sess?.hasWaiter, state: sess?.state, pings: sess?.ssePings });
+// #endregion
         if (sess) log.info('TRANSPORT closed', { sid: sess.shortId });
       };
 
