@@ -263,7 +263,7 @@
           }
           html += '</button>';
 
-          if (tabs.length > 1) {
+          if (tabs.length > 0) {
             tabs.forEach(function (tab, ti) {
               var chatKey = win.windowKey + '|' + ti;
               var loopState = CA.getLoopStateForChat(chatKey);
@@ -280,17 +280,12 @@
                 tabDotClass += ' idle';
               }
               var isThisActive = isActiveWin && tab.isActive;
+              var tabTitle = tab.title || state?.chatTitle || 'Chat';
               html += '<button class="sidebar-tab-item' + (isThisActive ? ' active' : '') + '" data-window-key="' + CA.escapeHtml(win.windowKey) + '" data-tab-idx="' + ti + '">';
               html += '<span class="' + tabDotClass + '"></span>';
-              html += '<span class="sidebar-tab-title">' + CA.escapeHtml(tab.title || 'Chat ' + (ti + 1)) + '</span>';
+              html += '<span class="sidebar-tab-title">' + CA.escapeHtml(tabTitle) + '</span>';
               html += '</button>';
             });
-          } else if (tabs.length === 1) {
-            var singleTab = tabs[0];
-            var singleTitle = singleTab.title || state?.chatTitle || 'Chat';
-            if (singleTitle !== workspaceName) {
-              html += '<div class="sidebar-tab-subtitle">' + CA.escapeHtml(singleTitle) + '</div>';
-            }
           }
 
           html += '</div>';
@@ -303,10 +298,9 @@
 
     sections.querySelectorAll('.sidebar-section-header').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        var mk = btn.dataset.machineKey;
-        if (mk) {
-          CA.switchMachine(mk);
-          CA.onFullRender();
+        var section = btn.closest('.sidebar-section');
+        if (section) {
+          section.classList.toggle('collapsed');
         }
       });
     });

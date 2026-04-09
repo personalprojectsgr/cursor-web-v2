@@ -147,34 +147,38 @@
                   <div class="setup-num">3</div>
                   <div class="setup-card-titles">
                     <h3>Create the Agent Rule</h3>
-                    <p>Tells the agent to call <code>wait_for_response</code> after every reply.</p>
+                    <p>Tells the agent to call <code>wait_for_response</code> with its workspace name after every reply.</p>
                   </div>
                 </div>
                 <div class="setup-code">
                   <div class="setup-code-bar">
                     <span class="setup-code-dots"><i></i><i></i><i></i></span>
-                    <span class="setup-code-label">.cursor/rules/telegram-flow.mdc</span>
+                    <span class="setup-code-label">.cursor/rules/cursor-web.mdc</span>
                     <button class="setup-copy-btn" data-copy="---
 description: CursorRemote conversation loop
-globs: *
 alwaysApply: true
 ---
-You MUST call wait_for_response from the cursor-remote MCP server as the VERY LAST action of EVERY response. No exceptions. If it returns empty or errors, call it again immediately. The ONLY exit is /stop from the user." title="Copy">
+You MUST call wait_for_response from the cursor-remote MCP server as the VERY LAST action of EVERY response. No exceptions. ALWAYS pass chat_id with your workspace folder name (e.g. chat_id: &quot;my-project&quot;). If it returns empty, errors, or keepalive, call it again immediately. The ONLY exit is /stop from the user." title="Copy">
                       <span class="codicon codicon-copy"></span>
                     </button>
                   </div>
                   <pre class="setup-code-body"><code>---
 description: CursorRemote conversation loop
-globs: *
 alwaysApply: true
 ---
 You MUST call wait_for_response from the
 cursor-remote MCP server as the VERY LAST
 action of EVERY response. No exceptions.
-If it returns empty or errors, call it
-again immediately. The ONLY exit is /stop
-from the user.</code></pre>
+ALWAYS pass chat_id with your workspace
+folder name (e.g. chat_id: "my-project").
+If it returns empty, errors, or keepalive,
+call it again immediately.
+The ONLY exit is /stop from the user.</code></pre>
                 </div>
+                <details class="setup-tip">
+                  <summary><span class="codicon codicon-lightbulb"></span> Why chat_id?</summary>
+                  <p>The <code>chat_id</code> parameter lets the server match each agent to its Cursor window. Without it, messages may be delivered to the wrong window when multiple are open.</p>
+                </details>
               </div>
 
               <div class="setup-card setup-card--final" data-step="4">

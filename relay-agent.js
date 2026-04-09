@@ -10,7 +10,7 @@ const RELAY_URL = process.env.RELAY_URL || 'https://cursorremote.up.railway.app'
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'admin123';
 const CDP_HOST = process.env.CDP_HOST || 'localhost';
 const CDP_PORT = parseInt(process.env.CDP_PORT || '9222', 10);
-const MACHINE_NAME = process.env.MACHINE_NAME || 'This PC';
+const MACHINE_NAME = process.env.MACHINE_NAME || require('os').hostname() || 'This PC';
 const MACHINE_KEY = `${CDP_HOST}:${CDP_PORT}`;
 
 const windows = new Map();

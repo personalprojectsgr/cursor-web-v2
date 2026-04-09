@@ -1,4 +1,5 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { CDPClient, discoverTargets } = require('./cdp-client');
 const { getExtractionScript } = require('./dom-extractor');
@@ -36,7 +37,7 @@ class MachineManager {
   ensureLocalhost() {
     if (!this.machines.has('localhost:9222')) {
       this.machines.set('localhost:9222', {
-        name: 'This PC',
+        name: os.hostname() || 'This PC',
         host: 'localhost',
         port: 9222,
         addedAt: Date.now(),
