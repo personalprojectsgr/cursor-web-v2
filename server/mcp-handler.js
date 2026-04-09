@@ -161,23 +161,27 @@ class SessionManager {
     const active = this._getActiveChats();
     if (!active || active.length === 0) return;
 
-    const taken = new Set();
-    for (const [sid, s] of this.sessions) {
-      if (s.chatKey && s.isAlive && sid !== sess.id) taken.add(s.chatKey);
-    }
-
     const needle = sess.chatId.toLowerCase();
     for (const c of active) {
-      if (taken.has(c.chatKey)) continue;
       const dt = (c.documentTitle || '').toLowerCase();
-      if (dt.includes(needle)) {
-        this.bind(sess, c.chatKey, 'chatid-match');
-        return;
+      if (!dt.includes(needle)) continue;
+
+      const holder = this._findBoundSession(c.chatKey);
+      if (holder && holder.id !== sess.id) {
+        if (!holder.hasWaiter && !holder.isLooping) {
+          log.info('BIND evict stale', { old: holder.shortId, new: sess.shortId, ck: c.chatKey });
+          holder.chatKey = null;
+          holder.state = 'dead';
+        } else {
+          continue;
+        }
       }
+      this.bind(sess, c.chatKey, 'chatid-match');
+      return;
     }
 
     log.info('BIND chatId no match', { sid: sess.shortId, chatId: sess.chatId,
-      windows: active.map(c => ({ dt: (c.documentTitle || '').substring(0, 40), taken: taken.has(c.chatKey) }))
+      windows: active.map(c => ({ dt: (c.documentTitle || '').substring(0, 40) }))
     });
   }
 
@@ -193,7 +197,11 @@ class SessionManager {
     let sess = this._findBoundSession(targetChatKey);
 
     if (!sess) {
-      log.info('ROUTE no bound session, checking unbound', { t, target: targetChatKey.split('|').slice(1).join('|').substring(0, 15) });
+      log.info('ROUTE no bound session', { t, target: targetChatKey.split('|').slice(1).join('|').substring(0, 15) });
+      log.info('ROUTE waiting for any session', { t });
+      const result = buildResult(text, images);
+      const delivered = await this._pollForWaiter({ chatKey: targetChatKey, hasWaiter: false, isAlive: true, chatId: null, id: 'none', shortId: 'none' }, result, id, t);
+      if (delivered) return delivered;
       return { accepted: false, id, status: 'no_session' };
     }
 
@@ -205,11 +213,9 @@ class SessionManager {
       return this._deliver(sess, result, id, t);
     }
 
-    if (sess.isLooping) {
-      log.info('ROUTE waiting for agent callback', { t, sid: sess.shortId });
-      const delivered = await this._pollForWaiter(sess, result, id, t);
-      if (delivered) return delivered;
-    }
+    log.info('ROUTE waiting for agent callback', { t, sid: sess.shortId });
+    const delivered = await this._pollForWaiter(sess, result, id, t);
+    if (delivered) return delivered;
 
     log.warn('ROUTE failed no waiter', { t, sid: sess.shortId, idle: Math.round(sess.idleMs / 1000) + 's' });
     return { accepted: false, id, status: 'no_waiter' };
@@ -225,15 +231,25 @@ class SessionManager {
   }
 
   _pollForWaiter(sess, result, id, t) {
+    const chatKey = sess.chatKey;
+    const chatId = sess.chatId;
     const started = Date.now();
     return new Promise((resolve) => {
       const check = () => {
         if (sess.hasWaiter) {
-          log.info('ROUTE agent returned', { t, waited: Math.round((Date.now() - started) / 1000) + 's' });
+          log.info('ROUTE agent returned', { t, sid: sess.shortId, waited: Math.round((Date.now() - started) / 1000) + 's' });
           resolve(this._deliver(sess, result, id, t));
           return;
         }
-        if (!sess.isAlive || !sess.isLooping || (Date.now() - started) > ROUTE_WAIT_MS) {
+
+        const replacement = this._findReplacementSession(chatKey, chatId, sess.id);
+        if (replacement && replacement.hasWaiter) {
+          log.info('ROUTE new session took over', { t, old: sess.shortId, new: replacement.shortId, waited: Math.round((Date.now() - started) / 1000) + 's' });
+          resolve(this._deliver(replacement, result, id, t));
+          return;
+        }
+
+        if ((Date.now() - started) > ROUTE_WAIT_MS) {
           resolve(null);
           return;
         }
@@ -241,6 +257,15 @@ class SessionManager {
       };
       setTimeout(check, ROUTE_POLL_MS);
     });
+  }
+
+  _findReplacementSession(chatKey, chatId, excludeId) {
+    for (const [, s] of this.sessions) {
+      if (!s.isAlive || s.id === excludeId) continue;
+      if (s.chatKey === chatKey) return s;
+      if (chatId && s.chatId === chatId && s.hasWaiter) return s;
+    }
+    return null;
   }
 
   _findBoundSession(chatKey) {
