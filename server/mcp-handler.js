@@ -111,23 +111,32 @@ class SessionManager {
       log.info('WAIT chatId set', { sid: sess.shortId, chatId });
     }
 
+    const wasBound = !!sess.chatKey;
     if (sess.chatId && !sess.chatKey) {
       this._bindByChatId(sess);
+    }
+
+    if (!wasBound && sess.chatKey) {
+      log.info('WAIT late-bind ok', { sid: sess.shortId, ck: sess.chatKey });
     }
 
     if (sess.pendingWaiter) {
       this._clearWaiter(sess, '');
     }
 
-    const deferred = await this._popDeferred(sess.chatKey);
-    if (deferred) {
-      log.info('ROUTE deferred ok', { sid: sess.shortId, t: deferred.t, age: Math.round((Date.now() - deferred.createdAt) / 1000) + 's' });
-      sess.delivered++;
-      this._trackDelivered(deferred.id);
-      sess.state = sess.chatKey ? 'bound' : 'unbound';
-      sess.lastResolvedAt = Date.now();
-      this._fire();
-      return deferred.result;
+    if (sess.chatKey) {
+      const deferred = await this._popDeferred(sess.chatKey);
+      if (deferred) {
+        log.info('ROUTE deferred ok', { sid: sess.shortId, t: deferred.t, age: Math.round((Date.now() - deferred.createdAt) / 1000) + 's' });
+        sess.delivered++;
+        this._trackDelivered(deferred.id);
+        sess.state = 'bound';
+        sess.lastResolvedAt = Date.now();
+        this._fire();
+        return deferred.result;
+      }
+    } else {
+      log.warn('WAIT unbound — no chatKey yet, will wait for bind', { sid: sess.shortId, chatId: sess.chatId });
     }
 
     sess.state = sess.chatKey ? 'waiting' : 'unbound';
@@ -163,8 +172,44 @@ class SessionManager {
         this._setupRedisWaiter(sess, wid);
       }
 
+      if (!sess.chatKey && sess.chatId) {
+        this._pollForBind(sess, wid, doResolve);
+      }
+
       this._fire();
     });
+  }
+
+  _pollForBind(sess, waiterId, doResolve) {
+    const maxAttempts = 30;
+    let attempt = 0;
+    const interval = setInterval(async () => {
+      attempt++;
+      if (!sess.pendingWaiter || sess.pendingWaiter._id !== waiterId) {
+        clearInterval(interval);
+        return;
+      }
+      if (sess.chatKey) {
+        clearInterval(interval);
+        const deferred = await this._popDeferred(sess.chatKey);
+        if (deferred && sess.pendingWaiter && sess.pendingWaiter._id === waiterId) {
+          sess.delivered++;
+          this._trackDelivered(deferred.id);
+          log.info('ROUTE poll-bind deferred ok', { sid: sess.shortId, t: deferred.t, ck: sess.chatKey });
+          doResolve(deferred.result);
+        } else if (redis.isAvailable() && !sess._redisSub) {
+          this._setupRedisWaiter(sess, waiterId);
+          log.info('WAIT poll-bind redis sub installed', { sid: sess.shortId, ck: sess.chatKey });
+        }
+        this._fire();
+        return;
+      }
+      this._bindByChatId(sess);
+      if (attempt >= maxAttempts) {
+        clearInterval(interval);
+        log.warn('WAIT poll-bind gave up', { sid: sess.shortId, chatId: sess.chatId, attempts: attempt });
+      }
+    }, 2000);
   }
 
   _setupRedisWaiter(sess, waiterId) {
@@ -201,12 +246,17 @@ class SessionManager {
     if (!sess.chatId || !this._getActiveChats) return;
 
     const active = this._getActiveChats();
-    if (!active || active.length === 0) return;
+    if (!active || active.length === 0) {
+      log.debug('BIND no active chats', { sid: sess.shortId, chatId: sess.chatId });
+      return;
+    }
 
     const needle = sess.chatId.toLowerCase();
+    let matchFound = false;
     for (const c of active) {
       const dt = (c.documentTitle || '').toLowerCase();
       if (!dt.includes(needle)) continue;
+      matchFound = true;
 
       const holder = this._findBoundSession(c.chatKey);
       if (holder && holder.id !== sess.id) {
@@ -229,6 +279,11 @@ class SessionManager {
       this.bind(sess, c.chatKey, 'chatid-match');
       return;
     }
+
+    if (!matchFound) {
+      const titles = active.map(c => (c.documentTitle || '').substring(0, 40));
+      log.warn('BIND no match', { sid: sess.shortId, chatId: sess.chatId, activeTitles: titles });
+    }
   }
 
   async route(text, images, msgId, targetChatKey) {
@@ -244,7 +299,8 @@ class SessionManager {
 
     if (!sess) {
       await this._storeDeferred(targetChatKey, result, id, t);
-      log.info('ROUTE deferred (no session)', { t });
+      const allSessions = [...this.sessions.values()].filter(s => s.isAlive).map(s => ({ sid: s.shortId, ck: s.chatKey, cid: s.chatId, w: s.hasWaiter }));
+      log.warn('ROUTE deferred (no session)', { t, targetCK: targetChatKey, alive: allSessions });
       return { accepted: true, id, status: 'deferred' };
     }
 
