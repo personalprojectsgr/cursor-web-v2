@@ -168,11 +168,18 @@ class SessionManager {
 
       const holder = this._findBoundSession(c.chatKey);
       if (holder && holder.id !== sess.id) {
-        if (!holder.hasWaiter && !holder.isLooping) {
+        const sameChatId = holder.chatId && holder.chatId.toLowerCase() === needle;
+        if (sameChatId) {
+          log.info('BIND takeover', { old: holder.shortId, new: sess.shortId, ck: c.chatKey, oldHadWaiter: holder.hasWaiter });
+          this._clearWaiter(holder, KEEPALIVE_TEXT);
+          holder.chatKey = null;
+          holder.state = 'dead';
+        } else if (!holder.hasWaiter && !holder.isLooping) {
           log.info('BIND evict stale', { old: holder.shortId, new: sess.shortId, ck: c.chatKey });
           holder.chatKey = null;
           holder.state = 'dead';
         } else {
+          log.info('BIND blocked by different chat', { sid: sess.shortId, holder: holder.shortId, holderCid: holder.chatId, ck: c.chatKey });
           continue;
         }
       }
@@ -181,7 +188,10 @@ class SessionManager {
     }
 
     log.info('BIND chatId no match', { sid: sess.shortId, chatId: sess.chatId,
-      windows: active.map(c => ({ dt: (c.documentTitle || '').substring(0, 40) }))
+      active: active.map(c => {
+        const bound = this._findBoundSession(c.chatKey);
+        return { dt: (c.documentTitle || '').substring(0, 50), bound: bound ? bound.shortId : null, boundCid: bound ? bound.chatId : null };
+      })
     });
   }
 
@@ -374,9 +384,22 @@ class SessionManager {
     const summary = alive.map(s => {
       const ck = s.chatKey ? s.chatKey.split('|')[1]?.substring(0, 6) : '-';
       const cid = s.chatId ? s.chatId.substring(0, 15) : '-';
-      return `${s.shortId}[${s.hasWaiter ? 'W' : '.'}${s.isLooping ? 'L' : '.'}] ck=${ck} cid=${cid} d=${s.delivered} ${Math.round(s.idleMs / 1000)}s`;
+      const age = Math.round((Date.now() - s.createdAt) / 1000);
+      return `${s.shortId}[${s.hasWaiter ? 'W' : '.'}${s.isLooping ? 'L' : '.'}] ck=${ck} cid=${cid} d=${s.delivered} idle=${Math.round(s.idleMs / 1000)}s age=${age}s`;
     });
     log.info('HB ' + summary.join(' | '));
+
+    const cidMap = {};
+    for (const s of alive) {
+      if (!s.chatId) continue;
+      if (!cidMap[s.chatId]) cidMap[s.chatId] = [];
+      cidMap[s.chatId].push(s.shortId);
+    }
+    for (const [cid, sids] of Object.entries(cidMap)) {
+      if (sids.length > 1) {
+        log.warn('HB duplicate chatId', { chatId: cid, sessions: sids });
+      }
+    }
   }
 
   _doCleanup() {
@@ -385,13 +408,16 @@ class SessionManager {
       if (s.state === 'dead') { toDelete.push(sid); continue; }
       if (s.hasWaiter || s.isLooping) continue;
       if (s.idleMs > REAP_IDLE_MS) {
-        log.info('REAP', { sid: s.shortId, ck: s.chatKey, cid: s.chatId });
+        log.info('REAP', { sid: s.shortId, ck: s.chatKey, cid: s.chatId, idle: Math.round(s.idleMs / 1000) + 's', age: Math.round((Date.now() - s.createdAt) / 1000) + 's' });
         s.state = 'dead';
         toDelete.push(sid);
       }
     }
     for (const sid of toDelete) this.sessions.delete(sid);
-    if (toDelete.length > 0) this._fire();
+    if (toDelete.length > 0) {
+      log.info('CLEANUP', { deleted: toDelete.length, remaining: this.sessions.size });
+      this._fire();
+    }
   }
 }
 
