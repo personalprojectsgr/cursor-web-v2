@@ -56,10 +56,13 @@ class Session {
   }
 }
 
+const DEFERRED_TTL_MS = 120_000;
+
 class SessionManager {
   constructor() {
     this.sessions = new Map();
     this.deliveredLog = [];
+    this.deferredRoutes = new Map();
     this._onWaiterChange = null;
     this._getActiveChats = null;
     this._heartbeat = setInterval(() => this._doHeartbeat(), HEARTBEAT_INTERVAL_MS);
@@ -113,6 +116,17 @@ class SessionManager {
     if (sess.pendingWaiter) {
       log.warn('WAIT overwrite', { sid: sess.shortId });
       this._clearWaiter(sess, '');
+    }
+
+    const deferred = sess.chatKey ? this._popDeferred(sess.chatKey) : null;
+    if (deferred) {
+      log.info('WAIT deferred delivery', { sid: sess.shortId, t: deferred.t, age: Math.round((Date.now() - deferred.createdAt) / 1000) + 's' });
+      sess.delivered++;
+      this._trackDelivered(deferred.id);
+      sess.state = sess.chatKey ? 'bound' : 'unbound';
+      sess.lastResolvedAt = Date.now();
+      this._fire();
+      return Promise.resolve(deferred.result);
     }
 
     sess.state = sess.chatKey ? 'waiting' : 'unbound';
@@ -204,20 +218,16 @@ class SessionManager {
       return { accepted: false, id, status: 'no_target' };
     }
 
+    const result = buildResult(text, images);
     let sess = this._findBoundSession(targetChatKey);
 
     if (!sess) {
       log.info('ROUTE no bound session', { t, target: targetChatKey.split('|').slice(1).join('|').substring(0, 15) });
-      log.info('ROUTE waiting for any session', { t });
-      const result = buildResult(text, images);
-      const delivered = await this._pollForWaiter({ chatKey: targetChatKey, hasWaiter: false, isAlive: true, chatId: null, id: 'none', shortId: 'none' }, result, id, t);
-      if (delivered) return delivered;
-      return { accepted: false, id, status: 'no_session' };
+      this._storeDeferred(targetChatKey, result, id, t);
+      return { accepted: true, id, status: 'deferred' };
     }
 
     log.info('ROUTE', { t, sid: sess.shortId, cid: sess.chatId, w: sess.hasWaiter, loop: sess.isLooping });
-
-    const result = buildResult(text, images);
 
     if (sess.hasWaiter) {
       return this._deliver(sess, result, id, t);
@@ -227,8 +237,9 @@ class SessionManager {
     const delivered = await this._pollForWaiter(sess, result, id, t);
     if (delivered) return delivered;
 
-    log.warn('ROUTE failed no waiter', { t, sid: sess.shortId, idle: Math.round(sess.idleMs / 1000) + 's' });
-    return { accepted: false, id, status: 'no_waiter' };
+    log.info('ROUTE deferred for next session', { t, sid: sess.shortId, idle: Math.round(sess.idleMs / 1000) + 's' });
+    this._storeDeferred(targetChatKey, result, id, t);
+    return { accepted: true, id, status: 'deferred' };
   }
 
   _deliver(sess, result, id, t) {
@@ -276,6 +287,22 @@ class SessionManager {
       if (chatId && s.chatId === chatId && s.hasWaiter) return s;
     }
     return null;
+  }
+
+  _storeDeferred(chatKey, result, id, t) {
+    this.deferredRoutes.set(chatKey, { result, id, t, createdAt: Date.now() });
+    log.info('DEFERRED stored', { t, ck: chatKey.split('|')[1]?.substring(0, 6) });
+  }
+
+  _popDeferred(chatKey) {
+    const d = this.deferredRoutes.get(chatKey);
+    if (!d) return null;
+    this.deferredRoutes.delete(chatKey);
+    if ((Date.now() - d.createdAt) > DEFERRED_TTL_MS) {
+      log.warn('DEFERRED expired', { t: d.t, age: Math.round((Date.now() - d.createdAt) / 1000) + 's' });
+      return null;
+    }
+    return d;
   }
 
   _findBoundSession(chatKey) {
@@ -387,7 +414,8 @@ class SessionManager {
       const age = Math.round((Date.now() - s.createdAt) / 1000);
       return `${s.shortId}[${s.hasWaiter ? 'W' : '.'}${s.isLooping ? 'L' : '.'}] ck=${ck} cid=${cid} d=${s.delivered} idle=${Math.round(s.idleMs / 1000)}s age=${age}s`;
     });
-    log.info('HB ' + summary.join(' | '));
+    const deferredInfo = this.deferredRoutes.size > 0 ? ` [deferred=${this.deferredRoutes.size}]` : '';
+    log.info('HB ' + summary.join(' | ') + deferredInfo);
 
     const cidMap = {};
     for (const s of alive) {
@@ -414,8 +442,16 @@ class SessionManager {
       }
     }
     for (const sid of toDelete) this.sessions.delete(sid);
+
+    for (const [ck, d] of this.deferredRoutes) {
+      if ((Date.now() - d.createdAt) > DEFERRED_TTL_MS) {
+        log.warn('DEFERRED expired cleanup', { t: d.t, ck: ck.split('|')[1]?.substring(0, 6) });
+        this.deferredRoutes.delete(ck);
+      }
+    }
+
     if (toDelete.length > 0) {
-      log.info('CLEANUP', { deleted: toDelete.length, remaining: this.sessions.size });
+      log.info('CLEANUP', { deleted: toDelete.length, remaining: this.sessions.size, deferred: this.deferredRoutes.size });
       this._fire();
     }
   }
