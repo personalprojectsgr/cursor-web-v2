@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const { z } = require('zod');
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { isInitializeRequest } = require('@modelcontextprotocol/sdk/types.js');
@@ -21,6 +22,7 @@ class Session {
     this.id = id;
     this.shortId = id.substring(0, 8);
     this.chatKey = null;
+    this.chatId = null;
     this.transport = null;
     this.pendingWaiter = null;
     this.pendingMessages = [];
@@ -45,7 +47,7 @@ class Session {
 
   toDebug() {
     return {
-      id: this.shortId, state: this.state, chatKey: this.chatKey,
+      id: this.shortId, state: this.state, chatKey: this.chatKey, chatId: this.chatId,
       hasWaiter: this.hasWaiter, waiterCount: this.waiterCount,
       delivered: this.delivered, queued: this.pendingMessages.length,
       idleSinceMs: this.idleSinceMs, ageMs: Date.now() - this.createdAt,
@@ -87,7 +89,7 @@ class SessionManager {
     this._fire();
   }
 
-  handleWait(sessionId) {
+  handleWait(sessionId, chatId) {
     const sess = this.get(sessionId);
     if (!sess) {
       log.error('WAIT unknown', { sid: sessionId?.substring(0, 8) });
@@ -97,6 +99,11 @@ class SessionManager {
     sess.waiterCount++;
     sess.lastWaiterAt = Date.now();
     sess.touch();
+
+    if (chatId && !sess.chatId) {
+      sess.chatId = chatId;
+      log.info('WAIT chatId set', { sid: sess.shortId, chatId });
+    }
 
     if (!sess.chatKey) this._tryAutoBind(sess);
 
@@ -286,6 +293,17 @@ class SessionManager {
     return bestWaiter || bestOther;
   }
 
+  _matchChatIdToWindow(chatId, activeChats, taken) {
+    if (!chatId) return null;
+    const needle = chatId.toLowerCase();
+    for (const c of activeChats) {
+      if (taken.has(c.chatKey)) continue;
+      const dt = (c.documentTitle || '').toLowerCase();
+      if (dt.includes(needle)) return c;
+    }
+    return null;
+  }
+
   _tryAutoBind(sess) {
     if (sess.chatKey) return;
     if (!this._getActiveChats) return;
@@ -304,10 +322,20 @@ class SessionManager {
     const cdpSummary = active.map(c => ({
       ck: c.chatKey.split('|').slice(1).join('|').substring(0, 12),
       title: (c.title || '').substring(0, 30),
+      docTitle: (c.documentTitle || '').substring(0, 40),
       mcp: c.activeMcp ? c.activeMcp.toolName + '@' + c.activeMcp.serverName : 'none',
       taken: taken.has(c.chatKey),
     }));
-    log.info('AUTOBIND attempt', { sid: sess.shortId, chats: cdpSummary });
+    log.info('AUTOBIND attempt', { sid: sess.shortId, chatId: sess.chatId, chats: cdpSummary });
+
+    if (sess.chatId) {
+      const chatIdMatch = this._matchChatIdToWindow(sess.chatId, active, taken);
+      if (chatIdMatch) {
+        this.bind(sess, chatIdMatch.chatKey, 'auto-bind-chatid');
+        return;
+      }
+      log.info('AUTOBIND chatId no match', { sid: sess.shortId, chatId: sess.chatId });
+    }
 
     const mcpMatch = active.find(c => !taken.has(c.chatKey) && isMcpActive(c));
     if (mcpMatch) {
@@ -370,6 +398,7 @@ class SessionManager {
         waiting: s.hasWaiter,
         loopActive: s.isLooping,
         chatKey: s.chatKey,
+        chatId: s.chatId,
         state: s.state,
       };
     }
@@ -392,25 +421,68 @@ class SessionManager {
     const aliveSessions = [...this.sessions.values()].filter(s => s.isAlive);
     const unbound = aliveSessions.filter(s => !s.chatKey);
 
+    if (unbound.length === 0 && !aliveSessions.some(s => s.chatId)) return;
+
     const mcpWindows = active.filter(isMcpActive);
-    if (mcpWindows.length > 0 && (unbound.length > 0 || aliveSessions.length > 1)) {
+
+    if (unbound.length > 0 || mcpWindows.length > 0) {
       log.info('REBIND scan', {
-        unbound: unbound.length,
+        unbound: unbound.map(s => ({ sid: s.shortId, chatId: s.chatId })),
         alive: aliveSessions.length,
         mcpWindows: mcpWindows.map(c => ({
           ck: c.chatKey.split('|').slice(1).join('|').substring(0, 12),
-          title: (c.title || '').substring(0, 30),
+          docTitle: (c.documentTitle || '').substring(0, 40),
         })),
         boundTo: aliveSessions.filter(s => s.chatKey).map(s => ({
           sid: s.shortId,
+          chatId: s.chatId,
           ck: s.chatKey.split('|').slice(1).join('|').substring(0, 12),
         })),
       });
     }
 
+    const taken = new Set();
+    for (const s of aliveSessions) {
+      if (s.chatKey) taken.add(s.chatKey);
+    }
+
+    for (const s of aliveSessions) {
+      if (s.chatKey) continue;
+      if (!s.chatId) continue;
+      const match = this._matchChatIdToWindow(s.chatId, active, taken);
+      if (match) {
+        this.bind(s, match.chatKey, 'rebind-chatid');
+        taken.add(match.chatKey);
+        const idx = unbound.indexOf(s);
+        if (idx >= 0) unbound.splice(idx, 1);
+      }
+    }
+
     const sessionByChatKey = new Map();
     for (const s of aliveSessions) {
       if (s.chatKey) sessionByChatKey.set(s.chatKey, s);
+    }
+
+    for (const s of aliveSessions) {
+      if (!s.chatKey || !s.chatId) continue;
+      const dt = (active.find(c => c.chatKey === s.chatKey)?.documentTitle || '').toLowerCase();
+      if (dt && !dt.includes(s.chatId.toLowerCase())) {
+        const correctChat = this._matchChatIdToWindow(s.chatId, active, taken);
+        if (correctChat) {
+          log.warn('REBIND chatId mismatch', {
+            sid: s.shortId,
+            chatId: s.chatId,
+            wasBound: s.chatKey.split('|').slice(1).join('|').substring(0, 12),
+            shouldBe: correctChat.chatKey.split('|').slice(1).join('|').substring(0, 12),
+          });
+          taken.delete(s.chatKey);
+          sessionByChatKey.delete(s.chatKey);
+          s.chatKey = null;
+          s.state = 'unbound';
+          this.bind(s, correctChat.chatKey, 'rebind-chatid-fix');
+          taken.add(correctChat.chatKey);
+        }
+      }
     }
 
     const mcpChatKeys = new Set(mcpWindows.map(c => c.chatKey));
@@ -419,27 +491,22 @@ class SessionManager {
       if (!s.chatKey) continue;
       if (mcpChatKeys.has(s.chatKey)) continue;
 
-      const hasUnboundWithMcp = unbound.length > 0 && mcpWindows.some(c => !sessionByChatKey.has(c.chatKey));
+      const hasUnboundWithMcp = unbound.length > 0 && mcpWindows.some(c => !taken.has(c.chatKey));
       if (!hasUnboundWithMcp) continue;
 
-      const correctChat = mcpWindows.find(c => !sessionByChatKey.has(c.chatKey));
+      const correctChat = mcpWindows.find(c => !taken.has(c.chatKey));
       if (correctChat) {
-        log.warn('REBIND mismatch', {
+        log.warn('REBIND mcp mismatch', {
           sid: s.shortId,
           wasBound: s.chatKey.split('|').slice(1).join('|').substring(0, 12),
           shouldBe: correctChat.chatKey.split('|').slice(1).join('|').substring(0, 12),
-          title: (correctChat.title || '').substring(0, 30),
         });
+        taken.delete(s.chatKey);
         sessionByChatKey.delete(s.chatKey);
         s.chatKey = null;
         s.state = 'unbound';
         unbound.push(s);
       }
-    }
-
-    const taken = new Set();
-    for (const s of aliveSessions) {
-      if (s.chatKey) taken.add(s.chatKey);
     }
 
     for (const chat of mcpWindows) {
@@ -458,7 +525,8 @@ class SessionManager {
     if (alive.length === 0) return;
     const summary = alive.map(s => {
       const ck = s.chatKey ? s.chatKey.split('|').pop() + ':' + s.chatKey.split('|')[1]?.substring(0, 6) : '-';
-      return `${s.shortId}[${s.state[0]}${s.hasWaiter ? 'W' : '.'}] ck=${ck} d=${s.delivered} q=${s.pendingMessages.length} ${Math.round(s.idleSinceMs / 1000)}s`;
+      const cid = s.chatId ? s.chatId.substring(0, 15) : '-';
+      return `${s.shortId}[${s.state[0]}${s.hasWaiter ? 'W' : '.'}] ck=${ck} cid=${cid} d=${s.delivered} q=${s.pendingMessages.length} ${Math.round(s.idleSinceMs / 1000)}s`;
     });
     log.info('HB ' + summary.join(' | '));
   }
@@ -505,9 +573,9 @@ function createMcpServer(sessionIdRef) {
   const server = new McpServer({ name: 'cursor-remote', version: '2.0.0' });
   server.tool(
     'wait_for_response',
-    'Blocks until the user sends a message from the Cursor Web remote client. Returns the message text and any attached images. Call this in a loop -- it stays open until a message arrives or returns a keepalive after 4 minutes.',
-    {},
-    async () => manager.handleWait(sessionIdRef.id)
+    'Blocks until the user sends a message from the Cursor Web remote client. Returns the message text and any attached images. Call this in a loop -- it stays open until a message arrives or returns a keepalive after 4 minutes. IMPORTANT: Always pass chat_id with your workspace/project folder name so the server knows which chat window you are.',
+    { chat_id: z.string().optional().describe('The workspace or project folder name (e.g. "my-project"). Pass this every time so the server can identify your chat window.') },
+    async ({ chat_id }) => manager.handleWait(sessionIdRef.id, chat_id)
   );
   return server;
 }
