@@ -102,14 +102,13 @@ class SessionManager {
     sess.lastWaiterAt = Date.now();
     sess.touch();
 
-    if (chatId) {
-      if (!sess.chatId) {
-        sess.chatId = chatId;
-        log.info('WAIT chatId set', { sid: sess.shortId, chatId });
-      }
-      if (!sess.chatKey) {
-        this._bindByChatId(sess);
-      }
+    if (chatId && !sess.chatId) {
+      sess.chatId = chatId;
+      log.info('WAIT chatId set', { sid: sess.shortId, chatId });
+    }
+
+    if (sess.chatId && !sess.chatKey) {
+      this._bindByChatId(sess);
     }
 
     if (sess.pendingWaiter) {
@@ -380,6 +379,13 @@ class SessionManager {
   _doHeartbeat() {
     const alive = [...this.sessions.values()].filter(s => s.isAlive);
     if (alive.length === 0) return;
+
+    for (const s of alive) {
+      if (s.chatId && !s.chatKey) {
+        this._bindByChatId(s);
+      }
+    }
+
     const summary = alive.map(s => {
       const ck = s.chatKey ? s.chatKey.split('|')[1]?.substring(0, 6) : '-';
       const cid = s.chatId || '-';
