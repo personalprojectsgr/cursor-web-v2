@@ -7,7 +7,7 @@ const { createLogger } = require('./logger');
 
 const log = createLogger('mcp');
 
-const KEEPALIVE_MS = 30_000;
+const KEEPALIVE_MS = 55_000;
 const KEEPALIVE_TEXT = '[keepalive] No user message received. Call wait_for_response again to continue waiting.';
 const ROUTE_WAIT_MS = 30_000;
 const ROUTE_POLL_MS = 500;
