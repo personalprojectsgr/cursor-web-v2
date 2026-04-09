@@ -612,7 +612,6 @@ async function handleMcpSse(req, res) {
     });
 
     await mcpServer.connect(transport);
-    await transport.start();
   } catch (err) {
     log.error('MCP SSE error', { error: err.message });
     if (!res.headersSent) res.status(500).send('SSE setup failed');
