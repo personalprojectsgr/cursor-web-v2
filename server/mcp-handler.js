@@ -14,6 +14,7 @@ const REAP_UNBOUND_MS = 600_000;
 const REAP_IDLE_MS = 1_800_000;
 const CLEANUP_INTERVAL_MS = 120_000;
 const HEARTBEAT_INTERVAL_MS = 120_000;
+const STALE_WAITER_MS = 300_000;
 const MAX_QUEUE = 10;
 const MAX_DELIVERED = 200;
 
@@ -421,11 +422,15 @@ class SessionManager {
     const aliveSessions = [...this.sessions.values()].filter(s => s.isAlive);
     const unbound = aliveSessions.filter(s => !s.chatKey);
 
-    if (unbound.length === 0 && !aliveSessions.some(s => s.chatId)) return;
-
     const mcpWindows = active.filter(isMcpActive);
 
-    if (unbound.length > 0 || mcpWindows.length > 0) {
+    const unboundWithChatId = unbound.filter(s => s.chatId);
+    const needsWork = unbound.length > 0 || mcpWindows.some(c => {
+      const boundSess = aliveSessions.find(s => s.chatKey === c.chatKey);
+      return !boundSess;
+    });
+
+    if (needsWork) {
       log.info('REBIND scan', {
         unbound: unbound.map(s => ({ sid: s.shortId, chatId: s.chatId })),
         alive: aliveSessions.length,
@@ -440,6 +445,8 @@ class SessionManager {
         })),
       });
     }
+
+    if (unbound.length === 0 && unboundWithChatId.length === 0 && !needsWork) return;
 
     const taken = new Set();
     for (const s of aliveSessions) {
@@ -523,12 +530,27 @@ class SessionManager {
   _doHeartbeat() {
     const alive = [...this.sessions.values()].filter(s => s.isAlive);
     if (alive.length === 0) return;
+    const now = Date.now();
     const summary = alive.map(s => {
       const ck = s.chatKey ? s.chatKey.split('|').pop() + ':' + s.chatKey.split('|')[1]?.substring(0, 6) : '-';
       const cid = s.chatId ? s.chatId.substring(0, 15) : '-';
       return `${s.shortId}[${s.state[0]}${s.hasWaiter ? 'W' : '.'}] ck=${ck} cid=${cid} d=${s.delivered} q=${s.pendingMessages.length} ${Math.round(s.idleSinceMs / 1000)}s`;
     });
     log.info('HB ' + summary.join(' | '));
+
+    for (const s of alive) {
+      if (!s.chatKey || s.hasWaiter) continue;
+      const sinceLast = now - (s.lastResolvedAt || s.lastWaiterAt || s.createdAt);
+      if (sinceLast > STALE_WAITER_MS && s.waiterCount > 0) {
+        log.warn('STALE agent loop dead', {
+          sid: s.shortId,
+          chatId: s.chatId,
+          ck: s.chatKey.split('|').slice(1).join('|').substring(0, 12),
+          lastWait: Math.round(sinceLast / 1000) + 's ago',
+          queued: s.pendingMessages.length,
+        });
+      }
+    }
   }
 
   _doCleanup() {
