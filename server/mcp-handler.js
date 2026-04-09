@@ -15,6 +15,8 @@ const REAP_IDLE_MS = 1_800_000;
 const CLEANUP_INTERVAL_MS = 120_000;
 const HEARTBEAT_INTERVAL_MS = 120_000;
 const STALE_WAITER_MS = 300_000;
+const ROUTE_WAIT_MS = 30_000;
+const ROUTE_POLL_MS = 500;
 const MAX_DELIVERED = 200;
 
 class Session {
@@ -155,7 +157,7 @@ class SessionManager {
     sess.pendingWaiter = null;
   }
 
-  route(text, images, msgId, targetChatKey) {
+  async route(text, images, msgId, targetChatKey) {
     const id = msgId || crypto.randomUUID();
     const t = id.substring(0, 8);
 
@@ -196,12 +198,13 @@ class SessionManager {
     const result = buildResult(text, images);
 
     if (sess.hasWaiter) {
-      sess.delivered++;
-      this._trackDelivered(id);
-      const age = Date.now() - sess.pendingWaiter.createdAt;
-      sess.pendingWaiter.resolve(result);
-      log.info('ROUTE ok', { t, sid: sess.shortId, ck: sess.chatKey, age: Math.round(age / 1000) });
-      return { accepted: true, id, status: 'delivered' };
+      return this._deliverToWaiter(sess, result, id, t);
+    }
+
+    if (sess.isLooping) {
+      log.info('ROUTE waiting for agent', { t, sid: sess.shortId, chatId: sess.chatId });
+      const delivered = await this._waitForWaiter(sess, result, id, t);
+      if (delivered) return delivered;
     }
 
     const sinceLast = Date.now() - (sess.lastResolvedAt || sess.lastWaiterAt || sess.createdAt);
@@ -209,11 +212,38 @@ class SessionManager {
       t,
       sid: sess.shortId,
       chatId: sess.chatId,
-      ck: sess.chatKey,
       sinceLastWait: Math.round(sinceLast / 1000) + 's',
-      waiterCount: sess.waiterCount,
     });
     return { accepted: false, id, status: 'no_waiter' };
+  }
+
+  _deliverToWaiter(sess, result, id, t) {
+    sess.delivered++;
+    this._trackDelivered(id);
+    const age = Date.now() - sess.pendingWaiter.createdAt;
+    sess.pendingWaiter.resolve(result);
+    log.info('ROUTE ok', { t, sid: sess.shortId, ck: sess.chatKey, age: Math.round(age / 1000) });
+    return { accepted: true, id, status: 'delivered' };
+  }
+
+  _waitForWaiter(sess, result, id, t) {
+    const started = Date.now();
+    return new Promise((resolve) => {
+      const check = () => {
+        if (sess.hasWaiter) {
+          const waited = Date.now() - started;
+          log.info('ROUTE agent returned', { t, sid: sess.shortId, waited: Math.round(waited / 1000) + 's' });
+          resolve(this._deliverToWaiter(sess, result, id, t));
+          return;
+        }
+        if (!sess.isAlive || !sess.isLooping || (Date.now() - started) > ROUTE_WAIT_MS) {
+          resolve(null);
+          return;
+        }
+        setTimeout(check, ROUTE_POLL_MS);
+      };
+      setTimeout(check, ROUTE_POLL_MS);
+    });
   }
 
   clearLoop() {
