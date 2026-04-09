@@ -5,10 +5,6 @@ const DIM = '\x1b[2m';
 
 const minLevel = LEVELS[process.env.LOG_LEVEL || 'info'] || 0;
 
-function formatTimestamp() {
-  return new Date().toISOString().replace('T', ' ').replace('Z', '');
-}
-
 function formatContext(context) {
   if (!context || Object.keys(context).length === 0) return '';
   const ctx = Object.entries(context)
@@ -22,57 +18,20 @@ function formatContext(context) {
   return ctx ? ` ${DIM}{${ctx}}${RESET}` : '';
 }
 
-function formatMessage(level, module, message, context) {
-  const ts = formatTimestamp();
-  const color = LEVEL_COLORS[level] || '';
-  const lvl = level.toUpperCase().padEnd(5);
-  const mod = module ? `[${module}]` : '';
-  return `${DIM}${ts}${RESET} ${color}${lvl}${RESET} ${mod} ${message}${formatContext(context)}`;
-}
-
-function emit(level, line) {
-  if (level === 'error') console.error(line);
-  else if (level === 'warn') console.warn(line);
-  else console.log(line);
-}
-
 function createLogger(module) {
   const methods = {};
-
   for (const level of Object.keys(LEVELS)) {
     methods[level] = (message, context) => {
       if (LEVELS[level] < minLevel) return;
-      emit(level, formatMessage(level, module, message, context));
+      const ts = new Date().toISOString().replace('T', ' ').replace('Z', '');
+      const color = LEVEL_COLORS[level] || '';
+      const lvl = level.toUpperCase().padEnd(5);
+      const line = `${DIM}${ts}${RESET} ${color}${lvl}${RESET} [${module}] ${message}${formatContext(context)}`;
+      if (level === 'error') console.error(line);
+      else if (level === 'warn') console.warn(line);
+      else console.log(line);
     };
   }
-
-  methods.timed = (label) => {
-    const start = Date.now();
-    return {
-      end: (message, context) => {
-        methods.info(message || label, { ...context, durationMs: Date.now() - start });
-      },
-      fail: (message, context) => {
-        methods.error(message || `${label} failed`, { ...context, durationMs: Date.now() - start });
-      },
-    };
-  };
-
-  methods.child = (subModule) => createLogger(`${module}:${subModule}`);
-
-  methods.withContext = (baseCtx) => {
-    const wrapped = {};
-    for (const level of Object.keys(LEVELS)) {
-      wrapped[level] = (message, context) => {
-        methods[level](message, { ...baseCtx, ...context });
-      };
-    }
-    wrapped.timed = methods.timed;
-    wrapped.child = methods.child;
-    wrapped.withContext = (moreCtx) => methods.withContext({ ...baseCtx, ...moreCtx });
-    return wrapped;
-  };
-
   return methods;
 }
 

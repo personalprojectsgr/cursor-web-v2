@@ -45,25 +45,12 @@ mcp.setActiveChatProvider(() => {
           windowKey: wKey,
           tabIndex: i,
           title: tab.title,
-          activeMcp: state?.activeMcp || null,
           documentTitle: state?.documentTitle || null,
         });
       }
     });
   }
   return result;
-});
-
-app.use((req, res, next) => {
-  const start = Date.now();
-  res.on('finish', () => {
-    const duration = Date.now() - start;
-    const skip = req.path === '/health' || req.path === '/mcp' || req.path.startsWith('/socket.io');
-    if (!skip && duration > 500) {
-      log.info(`SLOW ${req.method} ${req.path} ${res.statusCode}`, { ms: duration });
-    }
-  });
-  next();
 });
 
 app.use(express.json());
@@ -79,14 +66,11 @@ app.get('/api/machines', (req, res) => {
 app.post('/api/machines', (req, res) => {
   const { name, host, port } = req.body;
   if (!host) return res.status(400).json({ error: 'host is required' });
-  const result = machineManager.addMachine(name || host, host, port || 9222);
-  res.json(result);
+  res.json(machineManager.addMachine(name || host, host, port || 9222));
 });
 
 app.delete('/api/machines/:key', (req, res) => {
-  const key = decodeURIComponent(req.params.key);
-  const result = machineManager.removeMachine(key);
-  res.json(result);
+  res.json(machineManager.removeMachine(decodeURIComponent(req.params.key)));
 });
 
 app.post('/api/machines/:key/test', async (req, res) => {
@@ -130,11 +114,9 @@ app.get('/api/mode-options', async (req, res) => {
   try {
     const bridgeSocketId = machineManager.getBridgeForWindow(wKey);
     if (bridgeSocketId) {
-      const result = await sendBridgeCommand(bridgeSocketId, wKey, 'get_mode_options', {}, 'api_mode');
-      res.json(result);
+      res.json(await sendBridgeCommand(bridgeSocketId, wKey, 'get_mode_options', {}, 'api_mode'));
     } else {
-      const result = await machineManager.executeCommand(wKey, 'get_mode_options', {});
-      res.json(result);
+      res.json(await machineManager.executeCommand(wKey, 'get_mode_options', {}));
     }
   } catch (e) {
     res.json({ ok: false, error: e.message, modes: [] });
@@ -147,11 +129,9 @@ app.get('/api/model-options', async (req, res) => {
   try {
     const bridgeSocketId = machineManager.getBridgeForWindow(wKey);
     if (bridgeSocketId) {
-      const result = await sendBridgeCommand(bridgeSocketId, wKey, 'get_model_options', {}, 'api_model');
-      res.json(result);
+      res.json(await sendBridgeCommand(bridgeSocketId, wKey, 'get_model_options', {}, 'api_model'));
     } else {
-      const result = await machineManager.executeCommand(wKey, 'get_model_options', {});
-      res.json(result);
+      res.json(await machineManager.executeCommand(wKey, 'get_model_options', {}));
     }
   } catch (e) {
     res.json({ ok: false, error: e.message, models: [] });
@@ -180,7 +160,6 @@ io.on('connection', (socket) => {
 
     socket.on('bridge:hello', (info) => {
       socket.data.machineKey = info.machineKey;
-      socket.data.machineName = info.machineName;
       log.info('Bridge registered', { machineKey: info.machineKey, name: info.machineName });
       machineManager.registerBridge(socket.id, info.machineKey, info.machineName);
     });
@@ -198,7 +177,6 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-      log.info('Bridge disconnected', { socketId: socket.id, machineKey: socket.data.machineKey });
       machineManager.removeBridge(socket.id);
     });
   }
@@ -210,13 +188,8 @@ io.on('connection', (socket) => {
 
     socket.on('phone:command', async (payload) => {
       const { type, targetWindowKey, commandId, text, images, msgId, chatTabIndex } = payload;
-
       const resolvedTabIndex = typeof chatTabIndex === 'number' ? chatTabIndex : 0;
       const targetChatKey = targetWindowKey ? (targetWindowKey + '|' + resolvedTabIndex) : null;
-
-      if (type === 'send_message') {
-        log.info('PHONE send_message', { targetWindowKey, chatTabIndex: resolvedTabIndex, targetChatKey, textLen: text?.length ?? 0 });
-      }
 
       if (type === 'send_message' && (text || (images && images.length > 0))) {
         const result = await mcp.resolvePendingWait(text || '', images, msgId, targetChatKey);
@@ -234,11 +207,9 @@ io.on('connection', (socket) => {
       if (targetWKey) {
         const bridgeSocketId = machineManager.getBridgeForWindow(targetWKey);
         if (bridgeSocketId) {
-          const bridgeResult = await sendBridgeCommand(bridgeSocketId, targetWKey, type, cmdParams, commandId);
-          socket.emit('command:result', { commandId, ...bridgeResult });
+          socket.emit('command:result', { commandId, ...(await sendBridgeCommand(bridgeSocketId, targetWKey, type, cmdParams, commandId)) });
         } else {
-          const cmdResult = await machineManager.executeCommand(targetWKey, type, cmdParams);
-          socket.emit('command:result', { commandId, ...cmdResult });
+          socket.emit('command:result', { commandId, ...(await machineManager.executeCommand(targetWKey, type, cmdParams)) });
         }
       } else {
         socket.emit('command:result', { commandId, ok: false, error: 'No windows connected' });
@@ -248,13 +219,10 @@ io.on('connection', (socket) => {
     socket.on('phone:bind_mcp_session', (payload) => {
       if (payload.sessionId && payload.chatKey) {
         mcp.bindSessionToChat(payload.sessionId, payload.chatKey);
-        socket.emit('mcp:session_bound', { sessionId: payload.sessionId, chatKey: payload.chatKey });
       }
     });
 
-    socket.on('disconnect', () => {
-      log.info('Phone disconnected', { socketId: socket.id });
-    });
+    socket.on('disconnect', () => {});
   }
 
   socket.on('error', (err) => {
@@ -288,12 +256,7 @@ function sendBridgeCommand(bridgeSocketId, windowKey, type, params, clientComman
       return;
     }
 
-    bridgeSocket.emit('bridge:command', {
-      commandId: cmdId,
-      windowKey,
-      type,
-      params,
-    });
+    bridgeSocket.emit('bridge:command', { commandId: cmdId, windowKey, type, params });
   });
 }
 

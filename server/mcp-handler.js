@@ -11,6 +11,7 @@ const KEEPALIVE_MS = 55_000;
 const KEEPALIVE_TEXT = '[keepalive] No user message received. Call wait_for_response again to continue waiting.';
 const ROUTE_WAIT_MS = 30_000;
 const ROUTE_POLL_MS = 500;
+const DEFERRED_TTL_MS = 120_000;
 const REAP_IDLE_MS = 600_000;
 const CLEANUP_INTERVAL_MS = 120_000;
 const HEARTBEAT_INTERVAL_MS = 120_000;
@@ -55,8 +56,6 @@ class Session {
     };
   }
 }
-
-const DEFERRED_TTL_MS = 120_000;
 
 class SessionManager {
   constructor() {
@@ -114,13 +113,12 @@ class SessionManager {
     }
 
     if (sess.pendingWaiter) {
-      log.warn('WAIT overwrite', { sid: sess.shortId });
       this._clearWaiter(sess, '');
     }
 
     const deferred = sess.chatKey ? this._popDeferred(sess.chatKey) : null;
     if (deferred) {
-      log.info('WAIT deferred delivery', { sid: sess.shortId, t: deferred.t, age: Math.round((Date.now() - deferred.createdAt) / 1000) + 's' });
+      log.info('ROUTE deferred ok', { sid: sess.shortId, t: deferred.t, age: Math.round((Date.now() - deferred.createdAt) / 1000) + 's' });
       sess.delivered++;
       this._trackDelivered(deferred.id);
       sess.state = sess.chatKey ? 'bound' : 'unbound';
@@ -130,14 +128,12 @@ class SessionManager {
     }
 
     sess.state = sess.chatKey ? 'waiting' : 'unbound';
-    log.info('WAIT open', { sid: sess.shortId, ck: sess.chatKey, cid: sess.chatId, n: sess.waiterCount });
 
     return new Promise((resolve) => {
       const wid = crypto.randomUUID();
 
       const keepaliveTimer = setTimeout(() => {
         if (sess.pendingWaiter && sess.pendingWaiter._id === wid) {
-          log.info('WAIT keepalive', { sid: sess.shortId, ck: sess.chatKey });
           sess.pendingWaiter = null;
           sess.lastResolvedAt = Date.now();
           sess.state = sess.chatKey ? 'bound' : 'unbound';
@@ -184,29 +180,21 @@ class SessionManager {
       if (holder && holder.id !== sess.id) {
         const sameChatId = holder.chatId && holder.chatId.toLowerCase() === needle;
         if (sameChatId) {
-          log.info('BIND takeover', { old: holder.shortId, new: sess.shortId, ck: c.chatKey, oldHadWaiter: holder.hasWaiter });
+          log.info('BIND takeover', { old: holder.shortId, new: sess.shortId, ck: c.chatKey });
           this._clearWaiter(holder, KEEPALIVE_TEXT);
           holder.chatKey = null;
           holder.state = 'dead';
         } else if (!holder.hasWaiter && !holder.isLooping) {
-          log.info('BIND evict stale', { old: holder.shortId, new: sess.shortId, ck: c.chatKey });
+          log.info('BIND evict', { old: holder.shortId, new: sess.shortId, ck: c.chatKey });
           holder.chatKey = null;
           holder.state = 'dead';
         } else {
-          log.info('BIND blocked by different chat', { sid: sess.shortId, holder: holder.shortId, holderCid: holder.chatId, ck: c.chatKey });
           continue;
         }
       }
       this.bind(sess, c.chatKey, 'chatid-match');
       return;
     }
-
-    log.info('BIND chatId no match', { sid: sess.shortId, chatId: sess.chatId,
-      active: active.map(c => {
-        const bound = this._findBoundSession(c.chatKey);
-        return { dt: (c.documentTitle || '').substring(0, 50), bound: bound ? bound.shortId : null, boundCid: bound ? bound.chatId : null };
-      })
-    });
   }
 
   async route(text, images, msgId, targetChatKey) {
@@ -214,7 +202,6 @@ class SessionManager {
     const t = id.substring(0, 8);
 
     if (!targetChatKey) {
-      log.warn('ROUTE no target', { t });
       return { accepted: false, id, status: 'no_target' };
     }
 
@@ -222,32 +209,28 @@ class SessionManager {
     let sess = this._findBoundSession(targetChatKey);
 
     if (!sess) {
-      log.info('ROUTE no bound session', { t, target: targetChatKey.split('|').slice(1).join('|').substring(0, 15) });
       this._storeDeferred(targetChatKey, result, id, t);
+      log.info('ROUTE deferred (no session)', { t });
       return { accepted: true, id, status: 'deferred' };
     }
-
-    log.info('ROUTE', { t, sid: sess.shortId, cid: sess.chatId, w: sess.hasWaiter, loop: sess.isLooping });
 
     if (sess.hasWaiter) {
       return this._deliver(sess, result, id, t);
     }
 
-    log.info('ROUTE waiting for agent callback', { t, sid: sess.shortId });
     const delivered = await this._pollForWaiter(sess, result, id, t);
     if (delivered) return delivered;
 
-    log.info('ROUTE deferred for next session', { t, sid: sess.shortId, idle: Math.round(sess.idleMs / 1000) + 's' });
     this._storeDeferred(targetChatKey, result, id, t);
+    log.info('ROUTE deferred (poll expired)', { t, sid: sess.shortId });
     return { accepted: true, id, status: 'deferred' };
   }
 
   _deliver(sess, result, id, t) {
     sess.delivered++;
     this._trackDelivered(id);
-    const age = Date.now() - sess.pendingWaiter.createdAt;
     sess.pendingWaiter.resolve(result);
-    log.info('ROUTE ok', { t, sid: sess.shortId, cid: sess.chatId, age: Math.round(age / 1000) + 's' });
+    log.info('ROUTE ok', { t, sid: sess.shortId, cid: sess.chatId });
     return { accepted: true, id, status: 'delivered' };
   }
 
@@ -258,18 +241,15 @@ class SessionManager {
     return new Promise((resolve) => {
       const check = () => {
         if (sess.hasWaiter) {
-          log.info('ROUTE agent returned', { t, sid: sess.shortId, waited: Math.round((Date.now() - started) / 1000) + 's' });
           resolve(this._deliver(sess, result, id, t));
           return;
         }
-
         const replacement = this._findReplacementSession(chatKey, chatId, sess.id);
         if (replacement && replacement.hasWaiter) {
-          log.info('ROUTE new session took over', { t, old: sess.shortId, new: replacement.shortId, waited: Math.round((Date.now() - started) / 1000) + 's' });
+          log.info('ROUTE takeover', { t, old: sess.shortId, new: replacement.shortId });
           resolve(this._deliver(replacement, result, id, t));
           return;
         }
-
         if ((Date.now() - started) > ROUTE_WAIT_MS) {
           resolve(null);
           return;
@@ -291,17 +271,13 @@ class SessionManager {
 
   _storeDeferred(chatKey, result, id, t) {
     this.deferredRoutes.set(chatKey, { result, id, t, createdAt: Date.now() });
-    log.info('DEFERRED stored', { t, ck: chatKey.split('|')[1]?.substring(0, 6) });
   }
 
   _popDeferred(chatKey) {
     const d = this.deferredRoutes.get(chatKey);
     if (!d) return null;
     this.deferredRoutes.delete(chatKey);
-    if ((Date.now() - d.createdAt) > DEFERRED_TTL_MS) {
-      log.warn('DEFERRED expired', { t: d.t, age: Math.round((Date.now() - d.createdAt) / 1000) + 's' });
-      return null;
-    }
+    if ((Date.now() - d.createdAt) > DEFERRED_TTL_MS) return null;
     return d;
   }
 
@@ -323,8 +299,7 @@ class SessionManager {
       s.state = 'dead';
       count++;
     }
-    log.info('CLEAR all', { count });
-    this._fire();
+    if (count > 0) this._fire();
   }
 
   clearLoopForSession(sessionId) {
@@ -332,7 +307,6 @@ class SessionManager {
     if (!s) return;
     this._clearWaiter(s, '/stop');
     s.state = 'dead';
-    log.info('CLEAR session', { sid: s.shortId, ck: s.chatKey });
     this._fire();
   }
 
@@ -370,9 +344,7 @@ class SessionManager {
       const wk = parts.slice(0, 2).join('|');
       const tab = parts[2] || '0';
       if (wk === oldWindowKey) {
-        const newCK = newWindowKey + '|' + tab;
-        log.info('REBIND stale', { sid: s.shortId, from: s.chatKey.substring(0, 20), to: newCK.substring(0, 20) });
-        s.chatKey = newCK;
+        s.chatKey = newWindowKey + '|' + tab;
         s.touch();
         count++;
       }
@@ -410,24 +382,10 @@ class SessionManager {
     if (alive.length === 0) return;
     const summary = alive.map(s => {
       const ck = s.chatKey ? s.chatKey.split('|')[1]?.substring(0, 6) : '-';
-      const cid = s.chatId ? s.chatId.substring(0, 15) : '-';
-      const age = Math.round((Date.now() - s.createdAt) / 1000);
-      return `${s.shortId}[${s.hasWaiter ? 'W' : '.'}${s.isLooping ? 'L' : '.'}] ck=${ck} cid=${cid} d=${s.delivered} idle=${Math.round(s.idleMs / 1000)}s age=${age}s`;
+      const cid = s.chatId || '-';
+      return `${s.shortId}[${s.hasWaiter ? 'W' : '.'}${s.isLooping ? 'L' : '.'}] ck=${ck} cid=${cid} d=${s.delivered}`;
     });
-    const deferredInfo = this.deferredRoutes.size > 0 ? ` [deferred=${this.deferredRoutes.size}]` : '';
-    log.info('HB ' + summary.join(' | ') + deferredInfo);
-
-    const cidMap = {};
-    for (const s of alive) {
-      if (!s.chatId) continue;
-      if (!cidMap[s.chatId]) cidMap[s.chatId] = [];
-      cidMap[s.chatId].push(s.shortId);
-    }
-    for (const [cid, sids] of Object.entries(cidMap)) {
-      if (sids.length > 1) {
-        log.warn('HB duplicate chatId', { chatId: cid, sessions: sids });
-      }
-    }
+    log.info('HB ' + summary.join(' | '));
   }
 
   _doCleanup() {
@@ -436,7 +394,7 @@ class SessionManager {
       if (s.state === 'dead') { toDelete.push(sid); continue; }
       if (s.hasWaiter || s.isLooping) continue;
       if (s.idleMs > REAP_IDLE_MS) {
-        log.info('REAP', { sid: s.shortId, ck: s.chatKey, cid: s.chatId, idle: Math.round(s.idleMs / 1000) + 's', age: Math.round((Date.now() - s.createdAt) / 1000) + 's' });
+        log.info('REAP', { sid: s.shortId });
         s.state = 'dead';
         toDelete.push(sid);
       }
@@ -445,15 +403,11 @@ class SessionManager {
 
     for (const [ck, d] of this.deferredRoutes) {
       if ((Date.now() - d.createdAt) > DEFERRED_TTL_MS) {
-        log.warn('DEFERRED expired cleanup', { t: d.t, ck: ck.split('|')[1]?.substring(0, 6) });
         this.deferredRoutes.delete(ck);
       }
     }
 
-    if (toDelete.length > 0) {
-      log.info('CLEANUP', { deleted: toDelete.length, remaining: this.sessions.size, deferred: this.deferredRoutes.size });
-      this._fire();
-    }
+    if (toDelete.length > 0) this._fire();
   }
 }
 
@@ -477,8 +431,8 @@ function createMcpServer(sessionIdRef) {
   const server = new McpServer({ name: 'cursor-remote', version: '2.0.0' });
   server.tool(
     'wait_for_response',
-    'Blocks until the user sends a message from the Cursor Web remote client. Returns the message text and any attached images. Call this in a loop -- it stays open until a message arrives or returns a keepalive after 4 minutes. IMPORTANT: Always pass chat_id with your workspace/project folder name so the server knows which chat window you are.',
-    { chat_id: z.string().optional().describe('The workspace or project folder name (e.g. "my-project"). Pass this every time so the server can identify your chat window.') },
+    'Blocks until the user sends a message from the Cursor Web remote client. Returns the message text and any attached images. Call this in a loop. Always pass chat_id with your workspace folder name.',
+    { chat_id: z.string().optional().describe('Your workspace/project folder name so the server can identify your chat window.') },
     async ({ chat_id }) => manager.handleWait(sessionIdRef.id, chat_id)
   );
   return server;
@@ -512,7 +466,7 @@ async function handleMcpPost(req, res) {
       transport.onclose = () => {
         const sid = transport.sessionId || ref.id;
         const sess = manager.get(sid);
-        if (sess) log.info('TRANSPORT closed', { sid: sess.shortId });
+        if (sess) sess.state = 'dead';
       };
 
       await mcpServer.connect(transport);
@@ -540,7 +494,6 @@ async function handleMcpGet(req, res) {
   try {
     await sess.transport.handleRequest(req, res);
   } catch (err) {
-    log.error('MCP GET error', { error: err.message });
     if (!res.headersSent) res.status(500).send('Error');
   }
 }
@@ -549,11 +502,9 @@ async function handleMcpDelete(req, res) {
   const sessionId = req.headers['mcp-session-id'];
   const sess = sessionId ? manager.get(sessionId) : null;
   if (!sess || !sess.transport) return res.status(400).send('Invalid session');
-  log.info('MCP DELETE', { sid: sess.shortId });
   try {
     await sess.transport.handleRequest(req, res);
   } catch (err) {
-    log.error('MCP DELETE error', { error: err.message });
     if (!res.headersSent) res.status(500).send('Error');
   }
 }
@@ -567,7 +518,7 @@ module.exports = {
   setActiveChatProvider: (fn) => manager.setActiveChatProvider(fn),
   bindSessionToChat: (sessionId, chatKey) => {
     const s = manager.get(sessionId);
-    if (s) manager.bind(s, chatKey, 'external-bind');
+    if (s) manager.bind(s, chatKey, 'external');
   },
   isLoopedForChat: (ck) => manager.isLoopedForChat(ck),
   clearLoop: () => manager.clearLoop(),

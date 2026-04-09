@@ -361,15 +361,6 @@ class MachineManager {
       state.machineName = this.machines.get(wInfo.machineKey)?.name || wInfo.machineKey;
       state.machineKey = wInfo.machineKey;
 
-      const prev = this.states.get(windowKey);
-      const prevMcp = prev?.activeMcp?.toolName || null;
-      const currMcp = state.activeMcp?.toolName || null;
-      if (currMcp && currMcp !== prevMcp) {
-        state.activeMcpSince = Date.now();
-      } else if (currMcp && prev?.activeMcpSince) {
-        state.activeMcpSince = prev.activeMcpSince;
-      }
-
       this.states.set(windowKey, state);
 
       if (wInfo.title !== state.documentTitle) {
