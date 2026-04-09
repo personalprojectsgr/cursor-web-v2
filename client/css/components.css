@@ -1284,7 +1284,7 @@
 /* === INPUT AREA === */
 .input-area {
   flex-shrink: 0;
-  padding: 0 10px 10px;
+  padding: 4px 12px 12px;
   background: var(--cursor-bg);
 }
 
@@ -1304,7 +1304,7 @@
   background: rgba(228, 228, 228, 0.035);
   border: 1px solid rgba(228, 228, 228, 0.147);
   border-radius: 8px;
-  padding: 6px 8px 4px;
+  padding: 10px 12px 8px;
   display: flex;
   flex-direction: column;
   gap: 0;
@@ -1315,12 +1315,12 @@
 
 .input-editor {
   flex: 1;
-  min-height: 20px;
+  min-height: 36px;
   max-height: 200px;
   overflow-y: auto;
   font-family: var(--cursor-font);
   font-size: 13px;
-  line-height: 19.5px;
+  line-height: 20px;
   color: var(--cursor-text-primary);
   outline: none;
   word-break: break-word;
