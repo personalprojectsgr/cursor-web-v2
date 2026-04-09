@@ -1,15 +1,15 @@
 const crypto = require('node:crypto');
 const { z } = require('zod');
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
-const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
-const { isInitializeRequest } = require('@modelcontextprotocol/sdk/types.js');
+const { SSEServerTransport } = require('@modelcontextprotocol/sdk/server/sse.js');
 const { createLogger } = require('./logger');
 const redis = require('./redis');
 
 const log = createLogger('mcp');
 
-const KEEPALIVE_MS = 840_000;
+const KEEPALIVE_MS = 240_000;
 const KEEPALIVE_TEXT = '[keepalive] No user message received. Call wait_for_response again to continue waiting.';
+const SSE_PING_INTERVAL_MS = 30_000;
 const ROUTE_WAIT_MS = 30_000;
 const ROUTE_POLL_MS = 500;
 const DEFERRED_TTL_MS = 900_000;
@@ -25,6 +25,8 @@ class Session {
     this.chatKey = null;
     this.chatId = null;
     this.transport = null;
+    this.sseRes = null;
+    this.ssePingTimer = null;
     this.pendingWaiter = null;
     this._redisSub = null;
     this.state = 'unbound';
@@ -274,8 +276,13 @@ class SessionManager {
   _deliverDirect(sess, result, id, t) {
     sess.delivered++;
     this._trackDelivered(id);
-    sess.pendingWaiter.resolve(result);
-    log.info('ROUTE ok', { t, sid: sess.shortId, cid: sess.chatId });
+    const sseAlive = sess.sseRes && !sess.sseRes.writableEnded && !sess.sseRes.destroyed;
+    try {
+      sess.pendingWaiter.resolve(result);
+      log.info('ROUTE ok', { t, sid: sess.shortId, cid: sess.chatId, sseAlive });
+    } catch (e) {
+      log.error('ROUTE resolve failed', { t, sid: sess.shortId, error: e.message, sseAlive });
+    }
     return { accepted: true, id, status: 'delivered' };
   }
 
@@ -355,6 +362,7 @@ class SessionManager {
     for (const [, s] of this.sessions) {
       this._clearWaiter(s, '/stop');
       this._teardownRedisWaiter(s);
+      stopSsePing(s);
       s.state = 'dead';
       count++;
     }
@@ -366,6 +374,7 @@ class SessionManager {
     if (!s) return;
     this._clearWaiter(s, '/stop');
     this._teardownRedisWaiter(s);
+    stopSsePing(s);
     s.state = 'dead';
     this._fire();
   }
@@ -465,6 +474,7 @@ class SessionManager {
     for (const [sid, s] of this.sessions) {
       if (s.state === 'dead') {
         this._teardownRedisWaiter(s);
+        stopSsePing(s);
         toDelete.push(sid);
         continue;
       }
@@ -472,11 +482,15 @@ class SessionManager {
       if (s.idleMs > REAP_IDLE_MS) {
         log.info('REAP', { sid: s.shortId });
         this._teardownRedisWaiter(s);
+        stopSsePing(s);
         s.state = 'dead';
         toDelete.push(sid);
       }
     }
-    for (const sid of toDelete) this.sessions.delete(sid);
+    for (const sid of toDelete) {
+      sseTransports.delete(sid);
+      this.sessions.delete(sid);
+    }
 
     for (const [ck, d] of this.deferredRoutes) {
       if ((Date.now() - d.createdAt) > DEFERRED_TTL_MS) {
@@ -504,6 +518,8 @@ function buildResult(text, images) {
 
 const manager = new SessionManager();
 
+const sseTransports = new Map();
+
 function createMcpServer(sessionIdRef) {
   const server = new McpServer({ name: 'cursor-remote', version: '2.0.0' });
   server.tool(
@@ -515,85 +531,121 @@ function createMcpServer(sessionIdRef) {
   return server;
 }
 
-async function handleMcpPost(req, res) {
-  const sessionId = req.headers['mcp-session-id'];
-
-  try {
-    if (sessionId && sessionId.length > 0) {
-      const sess = manager.get(sessionId);
-      if (sess && sess.transport) {
-        sess.touch();
-        await sess.transport.handleRequest(req, res, req.body);
-        return;
+function startSsePing(sess) {
+  stopSsePing(sess);
+  sess.ssePingTimer = setInterval(() => {
+    if (sess.sseRes && !sess.sseRes.writableEnded && !sess.sseRes.destroyed) {
+      try {
+        sess.sseRes.write(':ping\n\n');
+      } catch (e) {
+        log.debug('SSE ping failed', { sid: sess.shortId, error: e.message });
+        stopSsePing(sess);
       }
+    } else {
+      stopSsePing(sess);
     }
+  }, SSE_PING_INTERVAL_MS);
+}
 
-    if ((!sessionId || sessionId.length === 0) && isInitializeRequest(req.body)) {
-      const ref = { id: 'pending-' + crypto.randomUUID() };
-      const mcpServer = createMcpServer(ref);
+function stopSsePing(sess) {
+  if (sess.ssePingTimer) {
+    clearInterval(sess.ssePingTimer);
+    sess.ssePingTimer = null;
+  }
+}
 
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => crypto.randomUUID(),
-        onsessioninitialized: (sid) => {
-          ref.id = sid;
-          manager.create(sid, transport);
-        },
-      });
+async function handleMcpSse(req, res) {
+  try {
+    const ref = { id: 'pending-' + crypto.randomUUID() };
+    const mcpServer = createMcpServer(ref);
 
-      transport.onclose = () => {
-        const sid = transport.sessionId || ref.id;
-        const sess = manager.get(sid);
-        if (sess) {
-          manager._teardownRedisWaiter(sess);
-          sess.state = 'dead';
-        }
-      };
+    const transport = new SSEServerTransport('/mcp/messages', res);
+    const sid = transport.sessionId;
+    ref.id = sid;
 
-      await mcpServer.connect(transport);
-      await transport.handleRequest(req, res, req.body);
-      return;
-    }
+    const originalSend = transport.send.bind(transport);
+    transport.send = async function (message) {
+      const alive = res && !res.writableEnded && !res.destroyed;
+      if (!alive) {
+        log.error('SSE SEND FAILED: stream dead', { sid: sid.substring(0, 8), msgMethod: message.method, msgId: message.id });
+        throw new Error('SSE stream is dead, cannot deliver tool result');
+      }
+      try {
+        await originalSend(message);
+        log.info('SSE SEND ok', { sid: sid.substring(0, 8), msgId: message.id });
+      } catch (e) {
+        log.error('SSE SEND FAILED: write error', { sid: sid.substring(0, 8), error: e.message, msgId: message.id });
+        throw e;
+      }
+    };
 
-    res.status(400).json({
-      jsonrpc: '2.0',
-      error: { code: -32000, message: 'Bad Request: No valid session ID' },
-      id: null,
+    transport.onerror = (err) => {
+      log.error('SSE transport error', { sid: sid.substring(0, 8), error: err.message });
+    };
+
+    sseTransports.set(sid, transport);
+    const sess = manager.create(sid, transport);
+    sess.sseRes = res;
+    startSsePing(sess);
+
+    log.info('SSE stream opened', { sid: sid.substring(0, 8) });
+
+    transport.onclose = () => {
+      log.info('SSE transport closed', { sid: sid.substring(0, 8) });
+      sseTransports.delete(sid);
+      stopSsePing(sess);
+      manager._teardownRedisWaiter(sess);
+      sess.state = 'dead';
+      manager._fire();
+    };
+
+    res.on('close', () => {
+      log.info('SSE response closed', { sid: sid.substring(0, 8) });
+      sseTransports.delete(sid);
+      stopSsePing(sess);
+      if (sess.isAlive) {
+        manager._clearWaiter(sess, '');
+        manager._teardownRedisWaiter(sess);
+        sess.state = 'dead';
+        manager._fire();
+      }
     });
+
+    await mcpServer.connect(transport);
+    await transport.start();
   } catch (err) {
-    log.error('MCP POST error', { error: err.message });
-    if (!res.headersSent) {
-      res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal error' }, id: null });
-    }
+    log.error('MCP SSE error', { error: err.message });
+    if (!res.headersSent) res.status(500).send('SSE setup failed');
   }
 }
 
-async function handleMcpGet(req, res) {
-  const sessionId = req.headers['mcp-session-id'];
-  const sess = sessionId ? manager.get(sessionId) : null;
-  if (!sess || !sess.transport) return res.status(400).send('Invalid session');
-  try {
-    await sess.transport.handleRequest(req, res);
-  } catch (err) {
-    if (!res.headersSent) res.status(500).send('Error');
+async function handleMcpMessages(req, res) {
+  const sessionId = req.query.sessionId;
+  if (!sessionId) {
+    return res.status(400).json({ error: 'Missing sessionId query parameter' });
   }
-}
 
-async function handleMcpDelete(req, res) {
-  const sessionId = req.headers['mcp-session-id'];
-  const sess = sessionId ? manager.get(sessionId) : null;
-  if (!sess || !sess.transport) return res.status(400).send('Invalid session');
+  const transport = sseTransports.get(sessionId);
+  if (!transport) {
+    log.warn('MCP message for unknown session', { sid: sessionId.substring(0, 8) });
+    return res.status(404).json({ error: 'Session not found' });
+  }
+
+  const sess = manager.get(sessionId);
+  if (sess) sess.touch();
+
   try {
-    await sess.transport.handleRequest(req, res);
+    await transport.handlePostMessage(req, res, req.body);
   } catch (err) {
-    if (!res.headersSent) res.status(500).send('Error');
+    log.error('MCP message error', { sid: sessionId.substring(0, 8), error: err.message });
+    if (!res.headersSent) res.status(500).json({ error: 'Internal error' });
   }
 }
 
 module.exports = {
   initRedis: () => redis.init(),
-  handleMcpPost,
-  handleMcpGet,
-  handleMcpDelete,
+  handleMcpSse,
+  handleMcpMessages,
   resolvePendingWait: (text, images, msgId, targetChatKey) => manager.route(text, images, msgId, targetChatKey),
   setOnWaiterChange: (fn) => manager.setOnWaiterChange(fn),
   setActiveChatProvider: (fn) => manager.setActiveChatProvider(fn),

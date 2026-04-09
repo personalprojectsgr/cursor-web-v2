@@ -53,11 +53,28 @@ mcp.setActiveChatProvider(() => {
   return result;
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
-app.post('/mcp', mcp.handleMcpPost);
-app.get('/mcp', mcp.handleMcpGet);
-app.delete('/mcp', mcp.handleMcpDelete);
+app.get('/sse', mcp.handleMcpSse);
+app.post('/messages', mcp.handleMcpMessages);
+
+app.get('/mcp', mcp.handleMcpSse);
+app.post('/mcp/messages', mcp.handleMcpMessages);
+
+app.post('/mcp', (req, res) => {
+  res.status(405).json({
+    jsonrpc: '2.0',
+    error: { code: -32000, message: 'This server uses SSE transport. Connect via GET /mcp or GET /sse' },
+    id: req.body && req.body.id ? req.body.id : null,
+  });
+});
+app.delete('/mcp', (req, res) => {
+  res.status(405).json({
+    jsonrpc: '2.0',
+    error: { code: -32000, message: 'This server uses SSE transport. Connect via GET /mcp or GET /sse' },
+    id: null,
+  });
+});
 
 app.get('/api/machines', (req, res) => {
   res.json(machineManager.listMachines());
