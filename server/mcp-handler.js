@@ -4,6 +4,7 @@ const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { isInitializeRequest } = require('@modelcontextprotocol/sdk/types.js');
 const { createLogger } = require('./logger');
+const redis = require('./redis');
 
 const log = createLogger('mcp');
 
@@ -25,6 +26,7 @@ class Session {
     this.chatId = null;
     this.transport = null;
     this.pendingWaiter = null;
+    this._redisSub = null;
     this.state = 'unbound';
     this.createdAt = Date.now();
     this.lastActivityAt = Date.now();
@@ -91,11 +93,11 @@ class SessionManager {
     this._fire();
   }
 
-  handleWait(sessionId, chatId) {
+  async handleWait(sessionId, chatId) {
     const sess = this.get(sessionId);
     if (!sess) {
       log.error('WAIT unknown', { sid: sessionId?.substring(0, 8) });
-      return Promise.resolve({ content: [{ type: 'text', text: '' }] });
+      return { content: [{ type: 'text', text: '' }] };
     }
 
     sess.waiterCount++;
@@ -115,7 +117,7 @@ class SessionManager {
       this._clearWaiter(sess, '');
     }
 
-    const deferred = sess.chatKey ? this._popDeferred(sess.chatKey) : null;
+    const deferred = await this._popDeferred(sess.chatKey);
     if (deferred) {
       log.info('ROUTE deferred ok', { sid: sess.shortId, t: deferred.t, age: Math.round((Date.now() - deferred.createdAt) / 1000) + 's' });
       sess.delivered++;
@@ -123,7 +125,7 @@ class SessionManager {
       sess.state = sess.chatKey ? 'bound' : 'unbound';
       sess.lastResolvedAt = Date.now();
       this._fire();
-      return Promise.resolve(deferred.result);
+      return deferred.result;
     }
 
     sess.state = sess.chatKey ? 'waiting' : 'unbound';
@@ -133,6 +135,7 @@ class SessionManager {
 
       const keepaliveTimer = setTimeout(() => {
         if (sess.pendingWaiter && sess.pendingWaiter._id === wid) {
+          this._teardownRedisWaiter(sess);
           sess.pendingWaiter = null;
           sess.lastResolvedAt = Date.now();
           sess.state = sess.chatKey ? 'bound' : 'unbound';
@@ -141,21 +144,49 @@ class SessionManager {
         }
       }, KEEPALIVE_MS);
 
-      sess.pendingWaiter = {
-        _id: wid,
-        createdAt: Date.now(),
-        resolve: (result) => {
-          clearTimeout(keepaliveTimer);
-          if (sess.pendingWaiter && sess.pendingWaiter._id === wid) {
-            sess.pendingWaiter = null;
-          }
-          sess.lastResolvedAt = Date.now();
-          sess.state = sess.chatKey ? 'bound' : 'unbound';
-          resolve(result);
-        },
+      const doResolve = (result) => {
+        clearTimeout(keepaliveTimer);
+        this._teardownRedisWaiter(sess);
+        if (sess.pendingWaiter && sess.pendingWaiter._id === wid) {
+          sess.pendingWaiter = null;
+        }
+        sess.lastResolvedAt = Date.now();
+        sess.state = sess.chatKey ? 'bound' : 'unbound';
+        resolve(result);
       };
+
+      sess.pendingWaiter = { _id: wid, createdAt: Date.now(), resolve: doResolve };
+
+      if (redis.isAvailable() && sess.chatKey) {
+        this._setupRedisWaiter(sess, wid);
+      }
+
       this._fire();
     });
+  }
+
+  _setupRedisWaiter(sess, waiterId) {
+    this._teardownRedisWaiter(sess);
+    const chatKey = sess.chatKey;
+    const sub = redis.subscribeInput(chatKey, async () => {
+      if (!sess.pendingWaiter || sess.pendingWaiter._id !== waiterId) return;
+      const deferred = await redis.popDeferred(chatKey);
+      if (deferred && sess.pendingWaiter && sess.pendingWaiter._id === waiterId) {
+        sess.delivered++;
+        this._trackDelivered(deferred.id);
+        log.info('ROUTE redis ok', { sid: sess.shortId, t: deferred.t });
+        sess.pendingWaiter.resolve(deferred.result);
+        this._fire();
+      }
+    });
+    sess._redisSub = sub;
+  }
+
+  _teardownRedisWaiter(sess) {
+    if (sess._redisSub) {
+      redis.cleanupSubscriber(sess._redisSub);
+      sess._redisSub = null;
+    }
   }
 
   _clearWaiter(sess, text) {
@@ -181,10 +212,12 @@ class SessionManager {
         if (sameChatId) {
           log.info('BIND takeover', { old: holder.shortId, new: sess.shortId, ck: c.chatKey });
           this._clearWaiter(holder, KEEPALIVE_TEXT);
+          this._teardownRedisWaiter(holder);
           holder.chatKey = null;
           holder.state = 'dead';
         } else if (!holder.hasWaiter && !holder.isLooping) {
           log.info('BIND evict', { old: holder.shortId, new: sess.shortId, ck: c.chatKey });
+          this._teardownRedisWaiter(holder);
           holder.chatKey = null;
           holder.state = 'dead';
         } else {
@@ -208,24 +241,37 @@ class SessionManager {
     let sess = this._findBoundSession(targetChatKey);
 
     if (!sess) {
-      this._storeDeferred(targetChatKey, result, id, t);
+      await this._storeDeferred(targetChatKey, result, id, t);
       log.info('ROUTE deferred (no session)', { t });
       return { accepted: true, id, status: 'deferred' };
     }
 
     if (sess.hasWaiter) {
-      return this._deliver(sess, result, id, t);
+      if (redis.isAvailable()) {
+        await redis.storeDeferred(targetChatKey, result, id, t);
+        await redis.publishInput(targetChatKey);
+        log.info('ROUTE pub ok', { t, sid: sess.shortId });
+        return { accepted: true, id, status: 'delivered' };
+      }
+      return this._deliverDirect(sess, result, id, t);
+    }
+
+    if (redis.isAvailable()) {
+      await redis.storeDeferred(targetChatKey, result, id, t);
+      await redis.publishInput(targetChatKey);
+      log.info('ROUTE pub deferred+notify', { t, sid: sess.shortId });
+      return { accepted: true, id, status: 'delivered' };
     }
 
     const delivered = await this._pollForWaiter(sess, result, id, t);
     if (delivered) return delivered;
 
-    this._storeDeferred(targetChatKey, result, id, t);
-    log.info('ROUTE deferred (poll expired)', { t, sid: sess.shortId });
+    this._storeDeferredMem(targetChatKey, result, id, t);
+    log.info('ROUTE deferred mem (poll expired)', { t, sid: sess.shortId });
     return { accepted: true, id, status: 'deferred' };
   }
 
-  _deliver(sess, result, id, t) {
+  _deliverDirect(sess, result, id, t) {
     sess.delivered++;
     this._trackDelivered(id);
     sess.pendingWaiter.resolve(result);
@@ -240,13 +286,13 @@ class SessionManager {
     return new Promise((resolve) => {
       const check = () => {
         if (sess.hasWaiter) {
-          resolve(this._deliver(sess, result, id, t));
+          resolve(this._deliverDirect(sess, result, id, t));
           return;
         }
         const replacement = this._findReplacementSession(chatKey, chatId, sess.id);
         if (replacement && replacement.hasWaiter) {
           log.info('ROUTE takeover', { t, old: sess.shortId, new: replacement.shortId });
-          resolve(this._deliver(replacement, result, id, t));
+          resolve(this._deliverDirect(replacement, result, id, t));
           return;
         }
         if ((Date.now() - started) > ROUTE_WAIT_MS) {
@@ -268,11 +314,24 @@ class SessionManager {
     return null;
   }
 
-  _storeDeferred(chatKey, result, id, t) {
+  async _storeDeferred(chatKey, result, id, t) {
+    if (!chatKey) return;
+    if (redis.isAvailable()) {
+      await redis.storeDeferred(chatKey, result, id, t);
+      return;
+    }
+    this._storeDeferredMem(chatKey, result, id, t);
+  }
+
+  _storeDeferredMem(chatKey, result, id, t) {
     this.deferredRoutes.set(chatKey, { result, id, t, createdAt: Date.now() });
   }
 
-  _popDeferred(chatKey) {
+  async _popDeferred(chatKey) {
+    if (!chatKey) return null;
+    if (redis.isAvailable()) {
+      return redis.popDeferred(chatKey);
+    }
     const d = this.deferredRoutes.get(chatKey);
     if (!d) return null;
     this.deferredRoutes.delete(chatKey);
@@ -295,6 +354,7 @@ class SessionManager {
     let count = 0;
     for (const [, s] of this.sessions) {
       this._clearWaiter(s, '/stop');
+      this._teardownRedisWaiter(s);
       s.state = 'dead';
       count++;
     }
@@ -305,6 +365,7 @@ class SessionManager {
     const s = this.get(sessionId);
     if (!s) return;
     this._clearWaiter(s, '/stop');
+    this._teardownRedisWaiter(s);
     s.state = 'dead';
     this._fire();
   }
@@ -326,6 +387,7 @@ class SessionManager {
   getDebugDump() {
     return {
       sessionCount: this.sessions.size,
+      redisAvailable: redis.isAvailable(),
       sessions: [...this.sessions.values()].map(s => s.toDebug()),
       deliveredRecent: this.deliveredLog.slice(-10),
     };
@@ -384,12 +446,16 @@ class SessionManager {
       if (s.chatId && !s.chatKey) {
         this._bindByChatId(s);
       }
+      if (redis.isAvailable() && s.chatKey && s.hasWaiter && !s._redisSub) {
+        this._setupRedisWaiter(s, s.pendingWaiter._id);
+      }
     }
 
     const summary = alive.map(s => {
       const ck = s.chatKey ? s.chatKey.split('|')[1]?.substring(0, 6) : '-';
       const cid = s.chatId || '-';
-      return `${s.shortId}[${s.hasWaiter ? 'W' : '.'}${s.isLooping ? 'L' : '.'}] ck=${ck} cid=${cid} d=${s.delivered}`;
+      const r = s._redisSub ? 'R' : '.';
+      return `${s.shortId}[${s.hasWaiter ? 'W' : '.'}${s.isLooping ? 'L' : '.'}${r}] ck=${ck} cid=${cid} d=${s.delivered}`;
     });
     log.info('HB ' + summary.join(' | '));
   }
@@ -397,10 +463,15 @@ class SessionManager {
   _doCleanup() {
     const toDelete = [];
     for (const [sid, s] of this.sessions) {
-      if (s.state === 'dead') { toDelete.push(sid); continue; }
+      if (s.state === 'dead') {
+        this._teardownRedisWaiter(s);
+        toDelete.push(sid);
+        continue;
+      }
       if (s.hasWaiter || s.isLooping) continue;
       if (s.idleMs > REAP_IDLE_MS) {
         log.info('REAP', { sid: s.shortId });
+        this._teardownRedisWaiter(s);
         s.state = 'dead';
         toDelete.push(sid);
       }
@@ -472,7 +543,10 @@ async function handleMcpPost(req, res) {
       transport.onclose = () => {
         const sid = transport.sessionId || ref.id;
         const sess = manager.get(sid);
-        if (sess) sess.state = 'dead';
+        if (sess) {
+          manager._teardownRedisWaiter(sess);
+          sess.state = 'dead';
+        }
       };
 
       await mcpServer.connect(transport);
@@ -516,6 +590,7 @@ async function handleMcpDelete(req, res) {
 }
 
 module.exports = {
+  initRedis: () => redis.init(),
   handleMcpPost,
   handleMcpGet,
   handleMcpDelete,

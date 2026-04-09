@@ -95,7 +95,7 @@ app.get('/health', (req, res) => {
     machines: machineManager.listMachines(),
     windows: machineManager.windows.size,
     bridges: machineManager.bridges.size,
-    mcp: { waiting: mcpWaiting, loopActive: mcpLoopActive },
+    mcp: { waiting: mcpWaiting, loopActive: mcpLoopActive, redis: require('./redis').isAvailable() },
   });
 });
 
@@ -263,6 +263,9 @@ function sendBridgeCommand(bridgeSocketId, windowKey, type, params, clientComman
 machineManager._onSessionRebind = (oldWindowKey, newWindowKey) => {
   mcp.rebindStaleSessions(oldWindowKey, newWindowKey);
 };
+
+const redisOk = mcp.initRedis();
+log.info('Redis', { available: redisOk });
 
 machineManager.startAllDiscovery();
 
