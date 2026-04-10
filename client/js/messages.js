@@ -238,6 +238,14 @@
       desc.textContent = part.description || 'Tool call';
     }
     left.appendChild(desc);
+
+    if (isTerminal && part.summary) {
+      var sum = document.createElement('span');
+      sum.className = 'tool-call-summary';
+      sum.textContent = part.summary;
+      left.appendChild(sum);
+    }
+
     header.appendChild(left);
 
     var actions = document.createElement('div');

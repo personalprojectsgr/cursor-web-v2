@@ -890,6 +890,16 @@
   font-weight: 400;
 }
 
+.tool-call-summary {
+  color: var(--cursor-text-muted);
+  font-size: 12px;
+  font-weight: 400;
+  margin-left: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .make-shine {
   background: linear-gradient(90deg, var(--cursor-text-secondary) 0%, var(--cursor-text-primary) 45%, var(--cursor-text-secondary) 90%);
   background-size: 200% 100%;

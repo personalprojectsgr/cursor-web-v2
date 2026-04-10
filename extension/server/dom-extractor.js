@@ -93,6 +93,72 @@ function getExtractionScript() {
 
           if (cls.includes('composer-human-message-container')) return;
 
+          if (cls.includes('ui-shell-tool-call') && !cls.includes('__')) {
+            const descEl = node.querySelector('.ui-shell-tool-call__description');
+            const summaryEl = node.querySelector('.ui-shell-tool-call__summary');
+            const bodyEl = node.querySelector('.ui-tool-call-card__body');
+            const isRunning = cls.includes('ui-shell-tool-call--with-stop') || cls.includes('ui-shell-tool-call--running');
+            const description = textOf(descEl);
+            const summary = textOf(summaryEl);
+            parts.push({
+              type: 'tool_call',
+              subtype: 'terminal',
+              description: description || 'Shell command',
+              output: textOf(bodyEl),
+              isRunning: isRunning,
+              summary: summary || undefined,
+            });
+            return;
+          }
+
+          if (cls.includes('ui-edit-tool-call') && !cls.includes('__')) {
+            const filenameEl = node.querySelector('.ui-edit-tool-call__filename');
+            const statsEl = node.querySelector('.ui-edit-tool-call__stats');
+            const bodyEl = node.querySelector('.ui-tool-call-card__body');
+            const filename = textOf(filenameEl);
+            const stats = textOf(statsEl);
+            const bodyText = textOf(bodyEl);
+            parts.push({
+              type: 'code_block',
+              filename: filename,
+              status: stats,
+              code: bodyText || '',
+              diff: null,
+              isNew: false,
+              isStreaming: false,
+            });
+            return;
+          }
+
+          if (cls.includes('ui-background-nudge-stack') && !cls.includes('__')) {
+            Array.from(node.children).forEach(child => processNode(child));
+            return;
+          }
+
+          if (cls.includes('composer-tool-call-block-wrapper')) {
+            if (node.querySelector('.composer-tool-call-container') || node.querySelector('.ui-shell-tool-call') || node.querySelector('.ui-edit-tool-call')) {
+              Array.from(node.children).forEach(child => processNode(child));
+              return;
+            }
+            const icon = node.querySelector('.composer-primary-toolcall-icon .show-file-icons');
+            const fileIconCls = icon ? (icon.firstElementChild ? icon.firstElementChild.className : '') : '';
+            const text = textOf(node);
+            const filenameMatch = text.match(/^([^\s]+)/);
+            const filename = filenameMatch ? filenameMatch[1] : '';
+            const status = text.replace(filename, '').trim();
+            parts.push({
+              type: 'code_block',
+              filename: filename,
+              status: status,
+              fileIconClass: fileIconCls,
+              code: '',
+              diff: null,
+              isNew: status.toLowerCase().includes('new') || status.toLowerCase().includes('created'),
+              isStreaming: false,
+            });
+            return;
+          }
+
           if (cls.includes('composer-tool-call-container')) {
             const isMcp = cls.includes('composer-mcp-tool-call-block');
             const isTerminal = cls.includes('composer-terminal-tool-call-block-container');
