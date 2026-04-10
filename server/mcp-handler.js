@@ -459,8 +459,17 @@ class SessionManager {
     this._storeDeferredMem(chatKey, result, id, t);
   }
 
+  _machineTabKey(chatKey) {
+    const parts = chatKey.split('|');
+    if (parts.length < 3) return null;
+    return parts[0] + '|*|' + parts[2];
+  }
+
   _storeDeferredMem(chatKey, result, id, t) {
-    this.deferredRoutes.set(chatKey, { result, id, t, createdAt: Date.now() });
+    const data = { result, id, t, chatKey, createdAt: Date.now() };
+    this.deferredRoutes.set(chatKey, data);
+    const mk = this._machineTabKey(chatKey);
+    if (mk) this.deferredRoutes.set(mk, data);
   }
 
   async _popDeferred(chatKey) {
@@ -468,9 +477,22 @@ class SessionManager {
     if (redis.isAvailable()) {
       return redis.popDeferred(chatKey);
     }
-    const d = this.deferredRoutes.get(chatKey);
+    let d = this.deferredRoutes.get(chatKey);
+    if (d) {
+      this.deferredRoutes.delete(chatKey);
+      const mk = this._machineTabKey(chatKey);
+      if (mk) this.deferredRoutes.delete(mk);
+    } else {
+      const mk = this._machineTabKey(chatKey);
+      if (mk) {
+        d = this.deferredRoutes.get(mk);
+        if (d) {
+          this.deferredRoutes.delete(mk);
+          if (d.chatKey) this.deferredRoutes.delete(d.chatKey);
+        }
+      }
+    }
     if (!d) return null;
-    this.deferredRoutes.delete(chatKey);
     if ((Date.now() - d.createdAt) > DEFERRED_TTL_MS) return null;
     return d;
   }

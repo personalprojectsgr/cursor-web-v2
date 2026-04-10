@@ -54,10 +54,19 @@ function inputChannel(chatKey) {
   return `mcp:input:${chatKey}`;
 }
 
+function machineDeferredKey(chatKey) {
+  const parts = chatKey.split('|');
+  if (parts.length < 3) return null;
+  return `mcp:deferred:machine:${parts[0]}|*|${parts[2]}`;
+}
+
 async function storeDeferred(chatKey, result, id, t) {
   if (!isAvailable()) return false;
   try {
-    await redis.set(deferredKey(chatKey), JSON.stringify({ result, id, t, createdAt: Date.now() }), 'EX', DEFERRED_TTL_S);
+    const data = JSON.stringify({ result, id, t, chatKey, createdAt: Date.now() });
+    await redis.set(deferredKey(chatKey), data, 'EX', DEFERRED_TTL_S);
+    const mk = machineDeferredKey(chatKey);
+    if (mk) await redis.set(mk, data, 'EX', DEFERRED_TTL_S);
     return true;
   } catch (e) {
     log.error('storeDeferred failed', { msg: e.message });
@@ -68,9 +77,23 @@ async function storeDeferred(chatKey, result, id, t) {
 async function popDeferred(chatKey) {
   if (!isAvailable()) return null;
   try {
-    const raw = await redis.get(deferredKey(chatKey));
+    let raw = await redis.get(deferredKey(chatKey));
+    if (raw) {
+      await redis.del(deferredKey(chatKey));
+      const mk = machineDeferredKey(chatKey);
+      if (mk) await redis.del(mk).catch(() => {});
+    } else {
+      const mk = machineDeferredKey(chatKey);
+      if (mk) {
+        raw = await redis.get(mk);
+        if (raw) {
+          await redis.del(mk);
+          const d = JSON.parse(raw);
+          if (d.chatKey) await redis.del(deferredKey(d.chatKey)).catch(() => {});
+        }
+      }
+    }
     if (!raw) return null;
-    await redis.del(deferredKey(chatKey));
     const d = JSON.parse(raw);
     if ((Date.now() - d.createdAt) > DEFERRED_TTL_S * 1000) return null;
     return d;
