@@ -254,8 +254,14 @@ class SessionManager {
     const needle = sess.chatId.toLowerCase();
     let matchFound = false;
     for (const c of active) {
-      const dt = (c.documentTitle || '').toLowerCase();
-      if (!dt.includes(needle)) continue;
+      const titleCandidates = [
+        c.documentTitle || '',
+        c.chatTitle || '',
+        c.windowTitle || '',
+        c.title || '',
+      ];
+      const matched = titleCandidates.some(t => t.toLowerCase().includes(needle));
+      if (!matched) continue;
       matchFound = true;
 
       const holder = this._findBoundSession(c.chatKey);
@@ -280,8 +286,27 @@ class SessionManager {
       return;
     }
 
+    if (!matchFound && active.length === 1) {
+      const c = active[0];
+      const holder = this._findBoundSession(c.chatKey);
+      if (!holder || holder.id === sess.id || (!holder.hasWaiter && !holder.isLooping)) {
+        if (holder && holder.id !== sess.id) {
+          this._teardownRedisWaiter(holder);
+          holder.chatKey = null;
+          holder.state = 'dead';
+        }
+        log.info('BIND single-window fallback', { sid: sess.shortId, chatId: sess.chatId, ck: c.chatKey });
+        this.bind(sess, c.chatKey, 'single-window');
+        return;
+      }
+    }
+
     if (!matchFound) {
-      const titles = active.map(c => (c.documentTitle || '').substring(0, 40));
+      const titles = active.map(c => ({
+        doc: (c.documentTitle || '').substring(0, 40),
+        chat: (c.chatTitle || '').substring(0, 40),
+        win: (c.windowTitle || '').substring(0, 40),
+      }));
       log.warn('BIND no match', { sid: sess.shortId, chatId: sess.chatId, activeTitles: titles });
     }
   }

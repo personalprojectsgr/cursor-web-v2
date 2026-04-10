@@ -46,6 +46,8 @@ mcp.setActiveChatProvider(() => {
           tabIndex: i,
           title: tab.title,
           documentTitle: state?.documentTitle || null,
+          chatTitle: state?.chatTitle || null,
+          windowTitle: wInfo.title || null,
         });
       }
     });
