@@ -128,6 +128,22 @@
       toolbarStop.addEventListener('click', CA.handleStop);
     }
 
+    var toolbarAccept = document.getElementById('toolbar-accept');
+    if (toolbarAccept) {
+      toolbarAccept.addEventListener('click', function () {
+        CursorSocket.sendCommand('accept_all');
+        CA.showToast('Accepting all...', 'success');
+      });
+    }
+
+    var toolbarReject = document.getElementById('toolbar-reject');
+    if (toolbarReject) {
+      toolbarReject.addEventListener('click', function () {
+        CursorSocket.sendCommand('reject_all');
+        CA.showToast('Rejecting all...', 'success');
+      });
+    }
+
     CA.initMachineModal();
     CA.initSetupGuide();
     renderAll();
@@ -171,9 +187,18 @@
     var state = CA.getActiveState();
     var titleEl = document.getElementById('chat-title');
     var statusEl = document.getElementById('agent-status');
+    var fileEl = document.getElementById('active-file');
 
     if (state) {
       titleEl.textContent = state.chatTitle || state.documentTitle || 'Cursor';
+      if (fileEl) {
+        if (state.activeFile) {
+          fileEl.textContent = state.activeFile;
+          fileEl.classList.remove('hidden');
+        } else {
+          fileEl.classList.add('hidden');
+        }
+      }
       var agentStatus = state.agentStatus || 'idle';
       var labels = {
         idle: '',
@@ -258,7 +283,23 @@
     }
 
     var isActive = state.agentStatus && state.agentStatus !== 'idle';
-    var hasFiles = state.toolbarButtons && state.toolbarButtons.files;
+    var fileCount = state.toolbarFileCount || 0;
+    var hasFiles = fileCount > 0;
+
+    var hasToolbarButtons = state.toolbarButtons && state.toolbarButtons.length > 0;
+    var hasStop = false;
+    var hasReview = false;
+    var hasAccept = false;
+    var hasReject = false;
+    if (hasToolbarButtons) {
+      state.toolbarButtons.forEach(function (btn) {
+        var t = (btn.text || '').toLowerCase();
+        if (t === 'stop') hasStop = true;
+        if (t === 'review') hasReview = true;
+        if (t.indexOf('accept') >= 0) hasAccept = true;
+        if (t.indexOf('reject') >= 0) hasReject = true;
+      });
+    }
 
     var chatKey = CA.getChatKey();
     var loopState = CA.getLoopStateForChat(chatKey);
@@ -279,17 +320,20 @@
     var filesEl = document.getElementById('toolbar-files');
     var stopBtn = document.getElementById('toolbar-stop');
     var reviewBtn = document.getElementById('toolbar-review');
+    var acceptBtn = document.getElementById('toolbar-accept');
+    var rejectBtn = document.getElementById('toolbar-reject');
 
     if (hasFiles) {
-      var fileCount = state.toolbarButtons.files;
-      filesEl.innerHTML = '<span class="codicon codicon-chevron-right"></span> ' + fileCount + ' Files';
+      filesEl.innerHTML = '<span class="codicon codicon-chevron-right"></span> ' + fileCount + ' File' + (fileCount !== 1 ? 's' : '');
       filesEl.style.display = '';
     } else {
       filesEl.style.display = 'none';
     }
 
-    stopBtn.classList.toggle('hidden', !showToolbarActive);
-    reviewBtn.classList.toggle('hidden', !showToolbarActive);
+    stopBtn.classList.toggle('hidden', !showToolbarActive || !hasStop);
+    reviewBtn.classList.toggle('hidden', !hasReview);
+    if (acceptBtn) acceptBtn.classList.toggle('hidden', !hasAccept);
+    if (rejectBtn) rejectBtn.classList.toggle('hidden', !hasReject);
   }
 
   document.addEventListener('DOMContentLoaded', init);

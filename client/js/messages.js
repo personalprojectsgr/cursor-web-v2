@@ -196,7 +196,8 @@
     var isMcp = part.subtype === 'mcp';
     var isTerminal = part.subtype === 'terminal';
     var isRunning = part.isRunning;
-    el.className = 'tool-call-block expanded' + (isRunning ? ' running' : '');
+    var defaultExpanded = isRunning || isMcp;
+    el.className = 'tool-call-block' + (defaultExpanded ? ' expanded' : '') + (isRunning ? ' running' : '');
 
     var header = document.createElement('div');
     header.className = 'tool-call-header';
@@ -265,14 +266,65 @@
       body.className = 'tool-call-body';
       var content = document.createElement('div');
       content.className = 'tool-call-body-content';
-      content.textContent = part.output || part.content || '';
+      var rawText = part.output || part.content || '';
+      if (isMcp) {
+        content.innerHTML = formatMcpBody(rawText);
+      } else {
+        content.textContent = rawText;
+      }
       body.appendChild(content);
       el.appendChild(body);
     }
   }
 
+  function formatMcpBody(text) {
+    if (!text) return '';
+    var jsonStart = text.indexOf('{');
+    var params = '';
+    var result = '';
+    if (jsonStart > 0) {
+      params = text.substring(0, jsonStart);
+      result = text.substring(jsonStart);
+    } else if (jsonStart === 0) {
+      result = text;
+    } else {
+      params = text;
+    }
+    var html = '';
+    if (params) {
+      var pairs = params.match(/[a-z_][a-z_0-9]*[^a-z_0-9{]/gi);
+      if (pairs && pairs.length > 0) {
+        html += '<div class="mcp-params">';
+        var remaining = params;
+        for (var i = 0; i < pairs.length; i++) {
+          var key = pairs[i].replace(/[^a-z_0-9]/gi, '');
+          var nextKey = i + 1 < pairs.length ? pairs[i + 1].replace(/[^a-z_0-9]/gi, '') : null;
+          var keyIdx = remaining.indexOf(key);
+          var valueStart = keyIdx + key.length;
+          var valueEnd = nextKey ? remaining.indexOf(nextKey, valueStart) : remaining.length;
+          var value = remaining.substring(valueStart, valueEnd).trim();
+          html += '<div class="mcp-param"><span class="mcp-param-key">' +
+            CA.escapeHtml(key) + '</span><span class="mcp-param-value">' +
+            CA.escapeHtml(value) + '</span></div>';
+        }
+        html += '</div>';
+      } else {
+        html += '<div class="mcp-params"><div class="mcp-param"><span class="mcp-param-value">' + CA.escapeHtml(params) + '</span></div></div>';
+      }
+    }
+    if (result) {
+      try {
+        var parsed = JSON.parse(result);
+        html += '<pre class="mcp-result"><code>' + CA.escapeHtml(JSON.stringify(parsed, null, 2)) + '</code></pre>';
+      } catch (e) {
+        html += '<pre class="mcp-result"><code>' + CA.escapeHtml(result) + '</code></pre>';
+      }
+    }
+    return html || CA.escapeHtml(text);
+  }
+
   function renderCodeBlock(el, part) {
-    el.className = 'code-block expanded' + (part.isStreaming ? ' streaming' : '');
+    el.className = 'code-block' + (part.isStreaming ? ' expanded streaming' : '') + (part.diff ? ' expanded' : '');
 
     var header = document.createElement('div');
     header.className = 'code-block-header';
@@ -415,8 +467,40 @@
     }
   }
 
+  var TOOL_LINE_ICONS = {
+    read: 'codicon-file',
+    grepped: 'codicon-search',
+    searched: 'codicon-search',
+    grep: 'codicon-search',
+    waited: 'codicon-clock',
+    'ran mcp': 'codicon-cube-nodes',
+    'run mcp': 'codicon-cube-nodes',
+    commit: 'codicon-git-commit',
+    committed: 'codicon-git-commit',
+    shell: 'codicon-terminal',
+    ran: 'codicon-terminal',
+    wrote: 'codicon-edit',
+    edited: 'codicon-edit',
+    created: 'codicon-new-file',
+    deleted: 'codicon-trash',
+    listed: 'codicon-list-flat',
+    fetched: 'codicon-cloud-download',
+  };
+
+  function getToolLineIcon(action) {
+    var key = (action || '').toLowerCase().trim();
+    if (TOOL_LINE_ICONS[key]) return TOOL_LINE_ICONS[key];
+    for (var k in TOOL_LINE_ICONS) {
+      if (key.indexOf(k) === 0) return TOOL_LINE_ICONS[k];
+    }
+    return 'codicon-circle-small-filled';
+  }
+
   function renderToolCallLine(el, part) {
     el.className = 'tool-call-line' + (part.isClickable ? ' clickable' : '');
+    var icon = document.createElement('span');
+    icon.className = 'tool-call-line-icon codicon ' + getToolLineIcon(part.action);
+    el.appendChild(icon);
     var actionEl = document.createElement('span');
     actionEl.className = 'tool-call-line-action';
     actionEl.textContent = part.action || '';

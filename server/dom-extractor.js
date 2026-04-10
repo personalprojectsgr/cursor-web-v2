@@ -331,13 +331,18 @@ function getExtractionScript() {
     // === TOOLBAR ===
     const toolbarSection = auxBar.querySelector('#composer-toolbar-section');
     const toolbarButtons = [];
+    let toolbarFileCount = 0;
     if (toolbarSection) {
       toolbarSection.querySelectorAll('.anysphere-text-button, .anysphere-secondary-button').forEach(btn => {
+        const btnText = textOf(btn).replace(/Ctrl.*$|Shift.*$|⌘.*$|⌫.*$/i, '').trim();
         toolbarButtons.push({
-          text: textOf(btn),
+          text: btnText,
           cls: (btn.className || '').substring(0, 150),
         });
       });
+      const fileText = toolbarSection.textContent || '';
+      const fileMatch = fileText.match(/(\\d+)\\s*Files?/i);
+      if (fileMatch) toolbarFileCount = parseInt(fileMatch[1]) || 0;
     }
 
     // === INPUT AREA ===
@@ -356,6 +361,10 @@ function getExtractionScript() {
 
     // === DOCUMENT TITLE (for workspace identification) ===
     const docTitle = document.title;
+
+    // === ACTIVE EDITOR FILE ===
+    const titleParts = docTitle.split(' - ');
+    const activeFile = titleParts.length > 1 ? titleParts[0].trim() : '';
 
     // === FINGERPRINT (comprehensive) ===
     let contentFp = '';
@@ -387,6 +396,7 @@ function getExtractionScript() {
       messages: messages,
       isLoading: isLoading,
       toolbarButtons: toolbarButtons,
+      toolbarFileCount: toolbarFileCount,
       input: {
         isEmpty: isEmpty,
         placeholder: placeholder,
@@ -395,6 +405,7 @@ function getExtractionScript() {
       model: model,
       activeMcp: activeMcpCall ? { toolName: mcpToolName, serverName: mcpServerName } : null,
       documentTitle: docTitle,
+      activeFile: activeFile,
       fingerprint: fingerprint,
       extractedAt: Date.now(),
     });

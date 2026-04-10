@@ -540,6 +540,20 @@
   text-overflow: ellipsis;
 }
 
+.active-file {
+  font-size: 11px;
+  color: var(--cursor-text-muted);
+  font-family: var(--cursor-font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 6px;
+}
+
+.active-file::before {
+  content: '\00b7 ';
+}
+
 .agent-status {
   font-size: var(--cursor-font-size-sm);
   color: var(--cursor-text-secondary);
@@ -814,6 +828,45 @@
   word-break: break-all;
   max-height: 300px;
   overflow-y: auto;
+}
+
+.mcp-params {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.mcp-param {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.mcp-param-key {
+  color: var(--cursor-accent);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.mcp-param-key::after { content: ':'; }
+
+.mcp-param-value {
+  color: var(--cursor-text-primary);
+}
+
+.mcp-result {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--cursor-bg-input);
+  border-radius: 4px;
+  font-size: 11px;
+  overflow-x: auto;
+}
+
+.mcp-result code {
+  font-family: var(--cursor-font-mono);
+  color: var(--cursor-text-secondary);
 }
 
 .tool-call-chevron {
@@ -1116,6 +1169,14 @@
 .tool-call-line.clickable { cursor: pointer; }
 .tool-call-line.clickable:hover { color: var(--cursor-text-primary); }
 
+.tool-call-line-icon {
+  font-size: 12px;
+  flex-shrink: 0;
+  opacity: 0.6;
+  width: 14px;
+  text-align: center;
+}
+
 .tool-call-line-action {
   color: var(--cursor-text-secondary);
   font-weight: 500;
@@ -1235,6 +1296,14 @@
 }
 
 .toolbar-btn-primary:hover { background: rgb(108, 108, 108); }
+
+.toolbar-btn-accept {
+  background: rgba(55, 148, 55, 0.25);
+  color: #4ec94e;
+  border: 1px solid rgba(55, 148, 55, 0.4);
+}
+
+.toolbar-btn-accept:hover { background: rgba(55, 148, 55, 0.35); }
 
 .toolbar-shortcut {
   font-size: 11px;
