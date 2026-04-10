@@ -247,12 +247,11 @@ class SessionManager {
 
     const active = this._getActiveChats();
     if (!active || active.length === 0) {
-      log.debug('BIND no active chats', { sid: sess.shortId, chatId: sess.chatId });
+      log.warn('BIND FAIL no active chats', { sid: sess.shortId, chatId: sess.chatId });
       return;
     }
 
     const needle = sess.chatId.toLowerCase();
-    let matchFound = false;
     for (const c of active) {
       const titleCandidates = [
         c.documentTitle || '',
@@ -262,7 +261,6 @@ class SessionManager {
       ];
       const matched = titleCandidates.some(t => t.toLowerCase().includes(needle));
       if (!matched) continue;
-      matchFound = true;
 
       const holder = this._findBoundSession(c.chatKey);
       if (holder && holder.id !== sess.id) {
@@ -286,29 +284,14 @@ class SessionManager {
       return;
     }
 
-    if (!matchFound && active.length === 1) {
-      const c = active[0];
-      const holder = this._findBoundSession(c.chatKey);
-      if (!holder || holder.id === sess.id || (!holder.hasWaiter && !holder.isLooping)) {
-        if (holder && holder.id !== sess.id) {
-          this._teardownRedisWaiter(holder);
-          holder.chatKey = null;
-          holder.state = 'dead';
-        }
-        log.info('BIND single-window fallback', { sid: sess.shortId, chatId: sess.chatId, ck: c.chatKey });
-        this.bind(sess, c.chatKey, 'single-window');
-        return;
-      }
-    }
-
-    if (!matchFound) {
-      const titles = active.map(c => ({
-        doc: (c.documentTitle || '').substring(0, 40),
-        chat: (c.chatTitle || '').substring(0, 40),
-        win: (c.windowTitle || '').substring(0, 40),
-      }));
-      log.warn('BIND no match', { sid: sess.shortId, chatId: sess.chatId, activeTitles: titles });
-    }
+    const diagnostics = active.map(c => ({
+      ck: c.chatKey,
+      doc: (c.documentTitle || '').substring(0, 60),
+      chat: (c.chatTitle || '').substring(0, 60),
+      win: (c.windowTitle || '').substring(0, 60),
+      tab: (c.title || '').substring(0, 60),
+    }));
+    log.error('BIND FAIL no title match', { sid: sess.shortId, chatId: sess.chatId, needle, activeCount: active.length, diagnostics });
   }
 
   async route(text, images, msgId, targetChatKey) {

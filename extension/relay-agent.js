@@ -346,7 +346,7 @@ async function executeCommand(windowKey, type, params) {
         const result = await client.evaluateJSON(`(async () => {
           const auxBar = document.getElementById('workbench.parts.auxiliarybar');
           if (!auxBar) return JSON.stringify({ ok: false, error: 'No aux bar' });
-          const trigger = auxBar.querySelector('.composer-unified-dropdown-model');
+          const trigger = auxBar.querySelector('.ui-model-picker__trigger') || auxBar.querySelector('.composer-unified-dropdown-model');
           if (!trigger) return JSON.stringify({ ok: false, error: 'Model trigger not found' });
           const currentModel = trigger.textContent.trim();
           if (currentModel.toLowerCase() === ${JSON.stringify(model.toLowerCase())}) return JSON.stringify({ ok: true, already: true });
@@ -426,7 +426,7 @@ async function executeCommand(windowKey, type, params) {
         const models = await client.evaluateJSON(`(async () => {
           const auxBar = document.getElementById('workbench.parts.auxiliarybar');
           if (!auxBar) return JSON.stringify({ ok: false, error: 'No aux bar' });
-          const trigger = auxBar.querySelector('.composer-unified-dropdown-model');
+          const trigger = auxBar.querySelector('.ui-model-picker__trigger') || auxBar.querySelector('.composer-unified-dropdown-model');
           if (!trigger) return JSON.stringify({ ok: false, error: 'Model trigger not found' });
           const currentModel = trigger.textContent.trim();
           trigger.click();

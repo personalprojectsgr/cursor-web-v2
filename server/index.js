@@ -37,7 +37,7 @@ mcp.setActiveChatProvider(() => {
   const result = [];
   for (const [wKey, wInfo] of machineManager.windows) {
     const state = machineManager.states.get(wKey);
-    const tabs = (state && state.chatTabs) || [{ title: state?.chatTitle || 'Chat', isActive: true }];
+    const tabs = (state && state.chatTabs && state.chatTabs.length > 0) ? state.chatTabs : [{ title: state?.chatTitle || 'Chat', isActive: true }];
     tabs.forEach((tab, i) => {
       if (tab.isActive) {
         result.push({

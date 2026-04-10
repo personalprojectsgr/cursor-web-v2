@@ -19,21 +19,19 @@ function getExtractionScript() {
     }
 
     // === CHAT TABS ===
-    const tabEls = auxBar.querySelectorAll('.composite-bar-action-tab');
+    const tabContainer = auxBar.querySelector('.tabs-container');
+    const tabEls = tabContainer ? tabContainer.querySelectorAll('[role="tab"]') : [];
     const chatTabs = [];
     tabEls.forEach((tab, i) => {
-      const anchor = tab.querySelector('a, [role="tab"]') || tab;
-      const ariaLabel = safeAttr(anchor, 'aria-label');
-      const knownPanels = ['Explorer', 'Search', 'Source Control', 'Run and Debug', 'Remote Explorer', 'Extensions', 'Accounts', 'Manage'];
-      const isPanel = knownPanels.some(p => ariaLabel.startsWith(p));
-      if (isPanel) return;
-      const label = tab.querySelector('.composite-bar-action-tab-label');
+      const ariaLabel = safeAttr(tab, 'aria-label');
+      const labelName = tab.querySelector('.label-name');
+      const title = textOf(labelName) || ariaLabel.split(',')[0] || 'Chat ' + (chatTabs.length + 1);
       chatTabs.push({
         index: i,
-        title: textOf(label) || ariaLabel || 'Chat ' + (chatTabs.length + 1),
-        isActive: tab.classList.contains('checked'),
+        title: title,
+        isActive: tab.classList.contains('active') && tab.classList.contains('selected'),
         badge: textOf(tab.querySelector('.badge')) || null,
-        selectorPath: '.composite-bar-action-tab:nth-child(' + (i + 1) + ')',
+        selectorPath: '.tabs-container [role="tab"]:nth-child(' + (i + 1) + ')',
       });
     });
 
@@ -43,8 +41,8 @@ function getExtractionScript() {
     const composerStatus = safeAttr(composerEl, 'data-composer-status');
 
     // === CHAT TITLE ===
-    const titleEl = auxBar.querySelector('.auxiliary-bar-chat-title') || auxBar.querySelector('.title-label h2');
-    const chatTitle = textOf(titleEl);
+    const activeTab = auxBar.querySelector('[role="tab"].active.selected');
+    const chatTitle = activeTab ? textOf(activeTab.querySelector('.label-name')) || textOf(activeTab) : '';
 
     // === MESSAGES ===
     const messages = [];
@@ -353,7 +351,7 @@ function getExtractionScript() {
     let mode = modeDropdown ? (modeDropdown.getAttribute('data-mode') || textOf(modeDropdown)) : 'Agent';
     mode = mode.charAt(0).toUpperCase() + mode.slice(1);
 
-    const modelTrigger = auxBar.querySelector('.composer-unified-dropdown-model');
+    const modelTrigger = auxBar.querySelector('.ui-model-picker__trigger') || auxBar.querySelector('.composer-unified-dropdown-model');
     let model = modelTrigger ? textOf(modelTrigger) : 'Auto';
 
     // === DOCUMENT TITLE (for workspace identification) ===

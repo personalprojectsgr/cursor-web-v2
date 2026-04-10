@@ -514,7 +514,7 @@ class MachineManager {
             const auxBar = document.getElementById('workbench.parts.auxiliarybar');
             if (!auxBar) return JSON.stringify({ ok: false, error: 'No aux bar' });
 
-            const trigger = auxBar.querySelector('.composer-unified-dropdown-model');
+            const trigger = auxBar.querySelector('.ui-model-picker__trigger') || auxBar.querySelector('.composer-unified-dropdown-model');
             if (!trigger) return JSON.stringify({ ok: false, error: 'Model trigger not found' });
 
             const currentModel = trigger.textContent.trim();
@@ -548,7 +548,7 @@ class MachineManager {
             }
 
             await new Promise(r => setTimeout(r, 300));
-            const verify = auxBar.querySelector('.composer-unified-dropdown-model');
+            const verify = auxBar.querySelector('.ui-model-picker__trigger') || auxBar.querySelector('.composer-unified-dropdown-model');
             const newModel = verify ? verify.textContent.trim() : '?';
             return JSON.stringify({ ok: true, previous: currentModel, current: newModel });
           })()`);
@@ -596,7 +596,7 @@ class MachineManager {
             const auxBar = document.getElementById('workbench.parts.auxiliarybar');
             if (!auxBar) return JSON.stringify({ ok: false, error: 'No aux bar' });
 
-            const trigger = auxBar.querySelector('.composer-unified-dropdown-model');
+            const trigger = auxBar.querySelector('.ui-model-picker__trigger') || auxBar.querySelector('.composer-unified-dropdown-model');
             if (!trigger) return JSON.stringify({ ok: false, error: 'Model trigger not found' });
             const currentModel = trigger.textContent.trim();
 
