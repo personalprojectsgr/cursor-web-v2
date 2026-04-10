@@ -10,7 +10,7 @@ let outputChannel = null;
 let restartCount = 0;
 let autoRestartTimer = null;
 
-const RELAY_SCRIPT = path.join(__dirname, '..', 'relay-agent.js');
+const RELAY_SCRIPT = path.join(__dirname, 'relay-agent.js');
 const RELAY_URL = process.env.CURSOR_WEB_RELAY_URL || 'https://cursorremote.up.railway.app';
 const AUTH_PASSWORD = process.env.CURSOR_WEB_AUTH_PASSWORD || 'admin123';
 const CDP_PORT = '9222';
@@ -92,7 +92,7 @@ function startRelay() {
         CDP_PORT: CDP_PORT,
         MACHINE_NAME: 'This PC',
       },
-      cwd: path.join(__dirname, '..'),
+      cwd: __dirname,
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });

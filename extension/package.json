@@ -2,7 +2,7 @@
   "name": "cursor-web-relay",
   "displayName": "Cursor Web Relay",
   "description": "Auto-starts the Cursor Web relay agent to bridge local CDP to the remote server",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "cursor-web",
   "engines": {
     "vscode": "^1.80.0"
@@ -25,5 +25,9 @@
         "title": "Cursor Web Relay: Restart"
       }
     ]
+  },
+  "dependencies": {
+    "ws": "^8.20.0",
+    "socket.io-client": "^4.8.3"
   }
 }
