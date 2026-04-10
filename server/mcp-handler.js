@@ -357,11 +357,12 @@ class SessionManager {
 
   _pollForBoundSession(targetChatKey, msgId, t) {
     const started = Date.now();
-    const maxWait = 60_000;
+    const maxWait = 180_000;
     return new Promise((resolve) => {
       const check = async () => {
+        const elapsed = Date.now() - started;
         if (this.deliveredLog.some(d => d.id === msgId)) {
-          log.info('ROUTE poll-bound already consumed', { t, ck: targetChatKey, elapsed: Date.now() - started });
+          log.info('ROUTE poll-bound already consumed', { t, ck: targetChatKey, elapsed });
           resolve({ accepted: true, id: msgId, status: 'delivered-via-deferred' });
           return;
         }
@@ -370,17 +371,17 @@ class SessionManager {
           if (redis.isAvailable()) {
             await redis.publishInput(targetChatKey);
           }
-          log.info('ROUTE poll-bound notify waiter', { t, sid: sess.shortId, ck: targetChatKey, elapsed: Date.now() - started });
+          log.info('ROUTE poll-bound notify waiter', { t, sid: sess.shortId, ck: targetChatKey, elapsed });
           resolve({ accepted: true, id: msgId, status: 'delivered-via-poll' });
           return;
         }
-        if ((Date.now() - started) > maxWait) {
+        if (elapsed > maxWait) {
           resolve(null);
           return;
         }
-        setTimeout(check, 1000);
+        setTimeout(check, 2000);
       };
-      setTimeout(check, 1000);
+      setTimeout(check, 2000);
     });
   }
 

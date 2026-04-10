@@ -112,8 +112,20 @@ function getExtractionScript() {
               const serverText = textOf(serverName);
               const fullDesc = (verbText ? verbText + ' ' : '') + toolText + (serverText ? ' in ' + serverText : '');
               const isExpandable = node.classList.contains('expandable');
+
+              const mcpParams = [];
+              node.querySelectorAll('.mcp-parameter-container .mcp-parameter-row').forEach(row => {
+                const key = row.querySelector('.mcp-parameter-key');
+                const val = row.querySelector('.mcp-parameter-value');
+                if (key || val) mcpParams.push({ key: textOf(key), value: textOf(val) });
+              });
+
+              const resultPre = node.querySelector('.mcp-tool-result-preformatted');
+              const mcpResult = resultPre ? textOf(resultPre) : '';
+
               const bodyEl = node.querySelector('.composer-tool-call-body-content');
               const bodyText = bodyEl ? textOf(bodyEl) : '';
+
               parts.push({
                 type: 'tool_call',
                 subtype: 'mcp',
@@ -123,6 +135,8 @@ function getExtractionScript() {
                 verb: verbText,
                 toolName: toolText,
                 serverName: serverText,
+                mcpParams: mcpParams.length > 0 ? mcpParams : undefined,
+                mcpResult: mcpResult || undefined,
                 output: bodyText || undefined,
               });
             } else if (isTerminal) {
@@ -331,13 +345,18 @@ function getExtractionScript() {
     // === TOOLBAR ===
     const toolbarSection = auxBar.querySelector('#composer-toolbar-section');
     const toolbarButtons = [];
+    let toolbarFileCount = 0;
     if (toolbarSection) {
       toolbarSection.querySelectorAll('.anysphere-text-button, .anysphere-secondary-button').forEach(btn => {
+        const btnText = textOf(btn).replace(/Ctrl.*$|Shift.*$|⌘.*$|⌫.*$/i, '').trim();
         toolbarButtons.push({
-          text: textOf(btn),
+          text: btnText,
           cls: (btn.className || '').substring(0, 150),
         });
       });
+      const fileText = toolbarSection.textContent || '';
+      const fileMatch = fileText.match(/(\\d+)\\s*Files?/i);
+      if (fileMatch) toolbarFileCount = parseInt(fileMatch[1]) || 0;
     }
 
     // === INPUT AREA ===
@@ -356,6 +375,10 @@ function getExtractionScript() {
 
     // === DOCUMENT TITLE (for workspace identification) ===
     const docTitle = document.title;
+
+    // === ACTIVE EDITOR FILE ===
+    const titleParts = docTitle.split(' - ');
+    const activeFile = titleParts.length > 1 ? titleParts[0].trim() : '';
 
     // === FINGERPRINT (comprehensive) ===
     let contentFp = '';
@@ -387,6 +410,7 @@ function getExtractionScript() {
       messages: messages,
       isLoading: isLoading,
       toolbarButtons: toolbarButtons,
+      toolbarFileCount: toolbarFileCount,
       input: {
         isEmpty: isEmpty,
         placeholder: placeholder,
@@ -395,6 +419,7 @@ function getExtractionScript() {
       model: model,
       activeMcp: activeMcpCall ? { toolName: mcpToolName, serverName: mcpServerName } : null,
       documentTitle: docTitle,
+      activeFile: activeFile,
       fingerprint: fingerprint,
       extractedAt: Date.now(),
     });
