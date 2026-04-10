@@ -112,8 +112,20 @@ function getExtractionScript() {
               const serverText = textOf(serverName);
               const fullDesc = (verbText ? verbText + ' ' : '') + toolText + (serverText ? ' in ' + serverText : '');
               const isExpandable = node.classList.contains('expandable');
+
+              const mcpParams = [];
+              node.querySelectorAll('.mcp-parameter-container .mcp-parameter-row').forEach(row => {
+                const key = row.querySelector('.mcp-parameter-key');
+                const val = row.querySelector('.mcp-parameter-value');
+                if (key || val) mcpParams.push({ key: textOf(key), value: textOf(val) });
+              });
+
+              const resultPre = node.querySelector('.mcp-tool-result-preformatted');
+              const mcpResult = resultPre ? textOf(resultPre) : '';
+
               const bodyEl = node.querySelector('.composer-tool-call-body-content');
               const bodyText = bodyEl ? textOf(bodyEl) : '';
+
               parts.push({
                 type: 'tool_call',
                 subtype: 'mcp',
@@ -123,6 +135,8 @@ function getExtractionScript() {
                 verb: verbText,
                 toolName: toolText,
                 serverName: serverText,
+                mcpParams: mcpParams.length > 0 ? mcpParams : undefined,
+                mcpResult: mcpResult || undefined,
                 output: bodyText || undefined,
               });
             } else if (isTerminal) {

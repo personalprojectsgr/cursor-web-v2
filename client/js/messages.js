@@ -261,66 +261,54 @@
 
     el.appendChild(header);
 
-    if (part.output || part.content) {
+    if (isMcp && (part.mcpParams || part.mcpResult)) {
       var body = document.createElement('div');
       body.className = 'tool-call-body';
       var content = document.createElement('div');
       content.className = 'tool-call-body-content';
-      var rawText = part.output || part.content || '';
-      if (isMcp) {
-        content.innerHTML = formatMcpBody(rawText);
-      } else {
-        content.textContent = rawText;
+      if (part.mcpParams) {
+        var paramsDiv = document.createElement('div');
+        paramsDiv.className = 'mcp-params';
+        part.mcpParams.forEach(function (p) {
+          var row = document.createElement('div');
+          row.className = 'mcp-param';
+          if (p.key) {
+            var keyEl = document.createElement('span');
+            keyEl.className = 'mcp-param-key';
+            keyEl.textContent = p.key;
+            row.appendChild(keyEl);
+          }
+          var valEl = document.createElement('span');
+          valEl.className = 'mcp-param-value';
+          valEl.textContent = p.value || '';
+          row.appendChild(valEl);
+          paramsDiv.appendChild(row);
+        });
+        content.appendChild(paramsDiv);
+      }
+      if (part.mcpResult) {
+        var pre = document.createElement('pre');
+        pre.className = 'mcp-result';
+        var code = document.createElement('code');
+        try {
+          code.textContent = JSON.stringify(JSON.parse(part.mcpResult), null, 2);
+        } catch (e) {
+          code.textContent = part.mcpResult;
+        }
+        pre.appendChild(code);
+        content.appendChild(pre);
       }
       body.appendChild(content);
       el.appendChild(body);
+    } else if (part.output || part.content) {
+      var body = document.createElement('div');
+      body.className = 'tool-call-body';
+      var content = document.createElement('div');
+      content.className = 'tool-call-body-content';
+      content.textContent = part.output || part.content || '';
+      body.appendChild(content);
+      el.appendChild(body);
     }
-  }
-
-  function formatMcpBody(text) {
-    if (!text) return '';
-    var jsonStart = text.indexOf('{');
-    var params = '';
-    var result = '';
-    if (jsonStart > 0) {
-      params = text.substring(0, jsonStart);
-      result = text.substring(jsonStart);
-    } else if (jsonStart === 0) {
-      result = text;
-    } else {
-      params = text;
-    }
-    var html = '';
-    if (params) {
-      var pairs = params.match(/[a-z_][a-z_0-9]*[^a-z_0-9{]/gi);
-      if (pairs && pairs.length > 0) {
-        html += '<div class="mcp-params">';
-        var remaining = params;
-        for (var i = 0; i < pairs.length; i++) {
-          var key = pairs[i].replace(/[^a-z_0-9]/gi, '');
-          var nextKey = i + 1 < pairs.length ? pairs[i + 1].replace(/[^a-z_0-9]/gi, '') : null;
-          var keyIdx = remaining.indexOf(key);
-          var valueStart = keyIdx + key.length;
-          var valueEnd = nextKey ? remaining.indexOf(nextKey, valueStart) : remaining.length;
-          var value = remaining.substring(valueStart, valueEnd).trim();
-          html += '<div class="mcp-param"><span class="mcp-param-key">' +
-            CA.escapeHtml(key) + '</span><span class="mcp-param-value">' +
-            CA.escapeHtml(value) + '</span></div>';
-        }
-        html += '</div>';
-      } else {
-        html += '<div class="mcp-params"><div class="mcp-param"><span class="mcp-param-value">' + CA.escapeHtml(params) + '</span></div></div>';
-      }
-    }
-    if (result) {
-      try {
-        var parsed = JSON.parse(result);
-        html += '<pre class="mcp-result"><code>' + CA.escapeHtml(JSON.stringify(parsed, null, 2)) + '</code></pre>';
-      } catch (e) {
-        html += '<pre class="mcp-result"><code>' + CA.escapeHtml(result) + '</code></pre>';
-      }
-    }
-    return html || CA.escapeHtml(text);
   }
 
   function renderCodeBlock(el, part) {
