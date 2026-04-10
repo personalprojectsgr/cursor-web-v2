@@ -207,7 +207,9 @@ class SessionManager {
       this._bindByChatId(sess);
       if (attempt >= maxAttempts) {
         clearInterval(interval);
-        log.warn('WAIT poll-bind gave up', { sid: sess.shortId, chatId: sess.chatId, attempts: attempt });
+        const activeNow = this._getActiveChats ? this._getActiveChats() : [];
+        const sessionsNow = [...this.sessions.values()].filter(s => s.isAlive).map(s => ({ sid: s.shortId, ck: s.chatKey, cid: s.chatId }));
+        log.warn('WAIT poll-bind gave up', { sid: sess.shortId, chatId: sess.chatId, attempts: attempt, activeChats: activeNow.length, sessions: sessionsNow.length });
       }
     }, 2000);
   }
@@ -247,7 +249,8 @@ class SessionManager {
 
     const active = this._getActiveChats();
     if (!active || active.length === 0) {
-      log.warn('BIND FAIL no active chats', { sid: sess.shortId, chatId: sess.chatId });
+      const allSessions = [...this.sessions.values()].filter(s => s.isAlive).map(s => ({ sid: s.shortId, ck: s.chatKey, cid: s.chatId, state: s.state }));
+      log.warn('BIND FAIL no active chats', { sid: sess.shortId, chatId: sess.chatId, sessions: allSessions.length });
       return;
     }
 
@@ -323,7 +326,9 @@ class SessionManager {
       const bound = await this._pollForBoundSession(targetChatKey, id, t);
       if (bound) return bound;
 
-      log.warn('ROUTE deferred (no session after poll)', { t, targetCK: targetChatKey });
+      const activeFinal = this._getActiveChats ? this._getActiveChats() : [];
+      const sessionsFinal = [...this.sessions.values()].filter(s => s.isAlive).map(s => ({ sid: s.shortId, ck: s.chatKey, cid: s.chatId, w: s.hasWaiter, state: s.state }));
+      log.warn('ROUTE deferred (no session after poll)', { t, targetCK: targetChatKey, activeChats: activeFinal.length, sessions: sessionsFinal });
       return { accepted: true, id, status: 'deferred' };
     }
 

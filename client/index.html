@@ -66,7 +66,7 @@
           <div id="empty-state-simple" class="empty-state-simple">
             <span class="codicon codicon-comment-discussion empty-icon"></span>
             <p id="empty-state-text">Waiting for Cursor IDE...</p>
-            <p class="empty-hint">Start Cursor with <code>--remote-debugging-port=9222</code></p>
+            <p class="empty-hint">Start Cursor with <code>--remote-debugging-port=9222 --remote-allow-origins=*</code></p>
           </div>
           <div id="setup-guide" class="setup-guide hidden">
 
@@ -95,17 +95,17 @@
                   <div class="setup-code-bar">
                     <span class="setup-code-dots"><i></i><i></i><i></i></span>
                     <span class="setup-code-label">Terminal</span>
-                    <button class="setup-copy-btn" data-copy="cursor --remote-debugging-port=9222" title="Copy">
+                    <button class="setup-copy-btn" data-copy="cursor --remote-debugging-port=9222 --remote-allow-origins=*" title="Copy">
                       <span class="codicon codicon-copy"></span>
                     </button>
                   </div>
-                  <pre class="setup-code-body"><code>cursor --remote-debugging-port=9222</code></pre>
+                  <pre class="setup-code-body"><code>cursor --remote-debugging-port=9222 --remote-allow-origins=*</code></pre>
                 </div>
                 <details class="setup-tip">
                   <summary><span class="codicon codicon-lightbulb"></span> Windows: permanent shortcut</summary>
                   <p>Right-click your Cursor shortcut &rarr; Properties &rarr; append the flag to Target:</p>
                   <div class="setup-code setup-code--sm">
-                    <pre class="setup-code-body"><code>"C:\Users\...\Cursor.exe" --remote-debugging-port=9222</code></pre>
+                    <pre class="setup-code-body"><code>"C:\...\Cursor.exe" --remote-debugging-port=9222 --remote-allow-origins=*</code></pre>
                   </div>
                 </details>
               </div>
