@@ -58,18 +58,24 @@ mcp.setActiveChatProvider(() => {
 app.use(express.json({ limit: '10mb' }));
 
 app.get('/sse', mcp.handleMcpSse);
-app.post('/messages', mcp.handleMcpMessages);
-
-app.get('/mcp', mcp.handleMcpSse);
-app.post('/mcp/messages', mcp.handleMcpMessages);
-
-app.post('/mcp', (req, res) => {
+app.post('/sse', (req, res) => {
   res.status(405).json({
     jsonrpc: '2.0',
-    error: { code: -32000, message: 'This server uses SSE transport. Connect via GET /mcp or GET /sse' },
+    error: { code: -32600, message: 'SSE transport only. POST messages to /messages after connecting via GET /sse' },
     id: req.body && req.body.id ? req.body.id : null,
   });
 });
+app.post('/messages', mcp.handleMcpMessages);
+
+app.get('/mcp', mcp.handleMcpSse);
+app.post('/mcp', (req, res) => {
+  res.status(405).json({
+    jsonrpc: '2.0',
+    error: { code: -32600, message: 'SSE transport only. POST messages to /mcp/messages after connecting via GET /mcp' },
+    id: req.body && req.body.id ? req.body.id : null,
+  });
+});
+app.post('/mcp/messages', mcp.handleMcpMessages);
 app.delete('/mcp', (req, res) => {
   res.status(405).json({
     jsonrpc: '2.0',

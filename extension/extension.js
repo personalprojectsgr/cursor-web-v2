@@ -56,16 +56,26 @@ function activate(context) {
 
 function waitForCdpThenStart() {
   setStatus('waiting', 'Waiting for CDP...');
+  let attempts = 0;
 
   const check = () => {
+    attempts++;
     const req = http.get(`http://localhost:${CDP_PORT}/json/version`, { timeout: 2000 }, (res) => {
       let data = '';
       res.on('data', (chunk) => data += chunk);
       res.on('end', () => {
+        outputChannel.appendLine(`CDP available on port ${CDP_PORT} after ${attempts} attempt(s)`);
         startRelay();
       });
     });
-    req.on('error', () => {
+    req.on('error', (err) => {
+      if (attempts === 1 || attempts % 10 === 0) {
+        outputChannel.appendLine(`CDP not available on port ${CDP_PORT} (attempt ${attempts}): ${err.code || err.message}`);
+        if (attempts === 1) {
+          outputChannel.appendLine('Start Cursor with: cursor --remote-debugging-port=9222 --remote-allow-origins=*');
+          outputChannel.appendLine('Or place {"remote-debugging-port":9222,"remote-allow-origins":"*"} in %APPDATA%\\Cursor\\argv.json and restart Cursor');
+        }
+      }
       setTimeout(check, 3000);
     });
     req.on('timeout', () => {
