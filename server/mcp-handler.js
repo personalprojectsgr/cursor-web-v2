@@ -306,6 +306,16 @@ class SessionManager {
     let sess = this._findBoundSession(targetChatKey);
 
     if (!sess) {
+      sess = this._findSessionByMachineAndChat(targetChatKey);
+      if (sess) {
+        const oldCk = sess.chatKey;
+        sess.chatKey = targetChatKey;
+        sess.touch();
+        log.info('ROUTE rebind window-key', { t, sid: sess.shortId, oldCk: oldCk?.split('|')[1]?.substring(0, 6), newCk: targetChatKey.split('|')[1]?.substring(0, 6) });
+      }
+    }
+
+    if (!sess) {
       await this._storeDeferred(targetChatKey, result, id, t);
       const allSessions = [...this.sessions.values()].filter(s => s.isAlive).map(s => ({ sid: s.shortId, ck: s.chatKey, cid: s.chatId, w: s.hasWaiter }));
       log.warn('ROUTE no bound session, polling for bind', { t, targetCK: targetChatKey, alive: allSessions });
@@ -366,7 +376,22 @@ class SessionManager {
           resolve({ accepted: true, id: msgId, status: 'delivered-via-deferred' });
           return;
         }
-        const sess = this._findBoundSession(targetChatKey);
+        let sess = this._findBoundSession(targetChatKey);
+        if (!sess) {
+          sess = this._findSessionByMachineAndChat(targetChatKey);
+          if (sess) {
+            const oldCk = sess.chatKey;
+            sess.chatKey = targetChatKey;
+            sess.touch();
+            log.info('ROUTE poll-bound rebind', { t, sid: sess.shortId, oldCk: oldCk?.split('|')[1]?.substring(0, 6), newCk: targetChatKey.split('|')[1]?.substring(0, 6) });
+            if (redis.isAvailable()) {
+              const deferred = await redis.popDeferred(targetChatKey);
+              if (deferred) {
+                await redis.storeDeferred(targetChatKey, deferred.result, deferred.id, deferred.t);
+              }
+            }
+          }
+        }
         if (sess && sess.hasWaiter) {
           if (redis.isAvailable()) {
             await redis.publishInput(targetChatKey);
@@ -450,6 +475,26 @@ class SessionManager {
     let bestTime = -1;
     for (const [, s] of this.sessions) {
       if (!s.isAlive || s.chatKey !== chatKey) continue;
+      const t = s.lastWaiterAt || s.lastActivityAt || s.createdAt;
+      if (t > bestTime) { best = s; bestTime = t; }
+    }
+    return best;
+  }
+
+  _findSessionByMachineAndChat(targetChatKey) {
+    const parts = targetChatKey.split('|');
+    if (parts.length < 3) return null;
+    const targetMachine = parts[0];
+    const targetTab = parts[2];
+
+    let best = null;
+    let bestTime = -1;
+    for (const [, s] of this.sessions) {
+      if (!s.isAlive || !s.chatKey || !s.chatId) continue;
+      const sParts = s.chatKey.split('|');
+      if (sParts.length < 3) continue;
+      if (sParts[0] !== targetMachine || sParts[2] !== targetTab) continue;
+      if (sParts[1] === parts[1]) continue;
       const t = s.lastWaiterAt || s.lastActivityAt || s.createdAt;
       if (t > bestTime) { best = s; bestTime = t; }
     }
@@ -553,6 +598,30 @@ class SessionManager {
     for (const s of alive) {
       if (s.chatId && !s.chatKey) {
         this._bindByChatId(s);
+      }
+      if (s.chatId && s.chatKey && this._getActiveChats) {
+        const active = this._getActiveChats();
+        const stillExists = active.some(c => c.chatKey === s.chatKey);
+        if (!stillExists && active.length > 0) {
+          const needle = s.chatId.toLowerCase();
+          const parts = s.chatKey.split('|');
+          const machine = parts[0];
+          for (const c of active) {
+            if (!c.chatKey.startsWith(machine)) continue;
+            const titles = [c.documentTitle || '', c.chatTitle || '', c.windowTitle || '', c.title || ''];
+            if (titles.some(t => t.toLowerCase().includes(needle))) {
+              const oldCk = s.chatKey;
+              s.chatKey = c.chatKey;
+              s.touch();
+              log.info('HB rebind stale', { sid: s.shortId, oldCk: oldCk.split('|')[1]?.substring(0, 6), newCk: c.chatKey.split('|')[1]?.substring(0, 6), cid: s.chatId });
+              if (redis.isAvailable() && s.hasWaiter && s._redisSub) {
+                this._teardownRedisWaiter(s);
+                this._setupRedisWaiter(s, s.pendingWaiter._id);
+              }
+              break;
+            }
+          }
+        }
       }
       if (redis.isAvailable() && s.chatKey && s.hasWaiter && !s._redisSub) {
         this._setupRedisWaiter(s, s.pendingWaiter._id);

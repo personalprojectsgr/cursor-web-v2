@@ -22,6 +22,7 @@ class MachineManager {
     this._onSessionRebind = null;
     this.bridges = new Map();
     this.bridgeWindows = new Map();
+    this._lastBridgeWindowKeys = new Map();
 
     this.ensureLocalhost();
     this.loadConfig();
@@ -734,7 +735,15 @@ class MachineManager {
         }
       }
 
+      if (staleKeys.length > 0) {
+        const prev = this._lastBridgeWindowKeys.get(bridge.machineKey) || [];
+        const merged = [...new Set([...prev, ...staleKeys])].slice(-10);
+        this._lastBridgeWindowKeys.set(bridge.machineKey, merged);
+      }
+
+      const newKeys = [];
       for (const win of payload.windows) {
+        const isNew = !this.bridgeWindows.has(win.windowKey);
         this.bridgeWindows.set(win.windowKey, socketId);
         this.windows.set(win.windowKey, {
           machineKey: bridge.machineKey,
@@ -743,13 +752,22 @@ class MachineManager {
           title: win.title,
           isBridge: true,
         });
+        if (isNew) newKeys.push(win.windowKey);
       }
 
-      if (staleKeys.length > 0 && payload.windows.length > 0 && this._onSessionRebind) {
-        for (const staleKey of staleKeys) {
-          for (const win of payload.windows) {
-            this._onSessionRebind(staleKey, win.windowKey);
+      if (newKeys.length > 0 && this._onSessionRebind) {
+        const previousKeys = staleKeys.length > 0
+          ? staleKeys
+          : (this._lastBridgeWindowKeys.get(bridge.machineKey) || []);
+        for (const oldKey of previousKeys) {
+          for (const newKey of newKeys) {
+            if (oldKey !== newKey) {
+              this._onSessionRebind(oldKey, newKey);
+            }
           }
+        }
+        if (previousKeys.length > 0) {
+          this._lastBridgeWindowKeys.set(bridge.machineKey, []);
         }
       }
     }
