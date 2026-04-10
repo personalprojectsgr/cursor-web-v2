@@ -18,18 +18,19 @@ The only MCP tool exposed. It blocks until the user sends a message from the web
 
 ### Loop Mechanism
 
-1. Agent calls `wait_for_response` → server holds for up to 14 minutes
+1. Agent calls `wait_for_response` → server holds for up to 13 minutes
 2. If user sends a message → resolve immediately with message content (text + optional images)
-3. If 14 minutes pass with no message → return keepalive text: `[keepalive] No user message received. Call wait_for_response again to continue waiting.`
+3. If 13 minutes pass with no message → return keepalive text: `[keepalive] No user message received. Call wait_for_response again to continue waiting.`
 4. Agent sees keepalive → immediately calls `wait_for_response` again (enforced by Cursor rules)
 5. This creates an infinite loop that only stops when the user sends `/stop`
 
-### Why 14 Minutes?
+### Why 13 Minutes?
 
-- Railway has a hard 15-minute HTTP request timeout — 14 minutes stays just under the limit
+- Railway kills SSE connections at exactly 15 minutes (hard timeout on the transport, not the request)
+- Keepalive must fire BEFORE Railway kills the SSE, so the agent gets the response and can re-call on a fresh session
+- 13 minutes gives a 2-minute safety margin for the agent to process the keepalive and establish a new connection
 - SSE pings every 30 seconds keep the connection alive through Railway's 60-second proxy keep-alive
-- Fewer reconnection cycles means less chance of binding issues or missed messages
-- Worst-case message delivery latency is 14 minutes (message arrives right after keepalive)
+- Worst-case message delivery latency is 13 minutes (message arrives right after keepalive)
 
 ### Session Lifecycle
 
@@ -37,7 +38,7 @@ The only MCP tool exposed. It blocks until the user sends a message from the web
 MCP INIT (POST /mcp) → session created (unbound)
   ↓
 wait_for_response called → auto-bind to a chat via CDP state → session "waiting"
-  ↓ (14min keepalive)           ↓ (user message)
+  ↓ (13min keepalive)           ↓ (user message)
 return keepalive text           return message content
   ↓                             ↓
 agent calls again               agent processes, calls again
