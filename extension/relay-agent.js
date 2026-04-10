@@ -394,6 +394,36 @@ async function executeCommand(windowKey, type, params) {
         return result || { ok: true };
       }
 
+      case 'undo_all': {
+        const result = await client.evaluateJSON(`(() => {
+          const auxBar = document.getElementById('workbench.parts.auxiliarybar');
+          const section = auxBar && auxBar.querySelector('#composer-toolbar-section');
+          if (!section) return JSON.stringify({ ok: false, error: 'Toolbar not found' });
+          const btns = section.querySelectorAll('.anysphere-text-button, .anysphere-secondary-button');
+          for (const btn of btns) {
+            const label = btn.querySelector('.truncate');
+            if (label && /undo/i.test(label.textContent)) { btn.click(); return JSON.stringify({ ok: true }); }
+          }
+          return JSON.stringify({ ok: false, error: 'Undo All button not found' });
+        })()`);
+        return result || { ok: false, error: 'Evaluation failed' };
+      }
+
+      case 'keep_all': {
+        const result = await client.evaluateJSON(`(() => {
+          const auxBar = document.getElementById('workbench.parts.auxiliarybar');
+          const section = auxBar && auxBar.querySelector('#composer-toolbar-section');
+          if (!section) return JSON.stringify({ ok: false, error: 'Toolbar not found' });
+          const btns = section.querySelectorAll('.anysphere-text-button, .anysphere-secondary-button');
+          for (const btn of btns) {
+            const label = btn.querySelector('.truncate');
+            if (label && /keep/i.test(label.textContent)) { btn.click(); return JSON.stringify({ ok: true }); }
+          }
+          return JSON.stringify({ ok: false, error: 'Keep All button not found' });
+        })()`);
+        return result || { ok: false, error: 'Evaluation failed' };
+      }
+
       case 'get_mode_options': {
         const modes = await client.evaluateJSON(`(async () => {
           const auxBar = document.getElementById('workbench.parts.auxiliarybar');

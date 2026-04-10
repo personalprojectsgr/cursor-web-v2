@@ -128,19 +128,19 @@
       toolbarStop.addEventListener('click', CA.handleStop);
     }
 
-    var toolbarAccept = document.getElementById('toolbar-accept');
-    if (toolbarAccept) {
-      toolbarAccept.addEventListener('click', function () {
-        CursorSocket.sendCommand('accept_all');
-        CA.showToast('Accepting all...', 'success');
+    var toolbarUndo = document.getElementById('toolbar-undo');
+    if (toolbarUndo) {
+      toolbarUndo.addEventListener('click', function () {
+        CursorSocket.sendCommand('undo_all');
+        CA.showToast('Undoing all...', 'success');
       });
     }
 
-    var toolbarReject = document.getElementById('toolbar-reject');
-    if (toolbarReject) {
-      toolbarReject.addEventListener('click', function () {
-        CursorSocket.sendCommand('reject_all');
-        CA.showToast('Rejecting all...', 'success');
+    var toolbarKeep = document.getElementById('toolbar-keep');
+    if (toolbarKeep) {
+      toolbarKeep.addEventListener('click', function () {
+        CursorSocket.sendCommand('keep_all');
+        CA.showToast('Keeping all...', 'success');
       });
     }
 
@@ -289,15 +289,15 @@
     var hasToolbarButtons = state.toolbarButtons && state.toolbarButtons.length > 0;
     var hasStop = false;
     var hasReview = false;
-    var hasAccept = false;
-    var hasReject = false;
+    var hasUndo = false;
+    var hasKeep = false;
     if (hasToolbarButtons) {
       state.toolbarButtons.forEach(function (btn) {
         var t = (btn.text || '').toLowerCase();
         if (t === 'stop') hasStop = true;
         if (t === 'review') hasReview = true;
-        if (t.indexOf('accept') >= 0) hasAccept = true;
-        if (t.indexOf('reject') >= 0) hasReject = true;
+        if (t.indexOf('undo') >= 0) hasUndo = true;
+        if (t.indexOf('keep') >= 0) hasKeep = true;
       });
     }
 
@@ -320,8 +320,8 @@
     var filesEl = document.getElementById('toolbar-files');
     var stopBtn = document.getElementById('toolbar-stop');
     var reviewBtn = document.getElementById('toolbar-review');
-    var acceptBtn = document.getElementById('toolbar-accept');
-    var rejectBtn = document.getElementById('toolbar-reject');
+    var undoBtn = document.getElementById('toolbar-undo');
+    var keepBtn = document.getElementById('toolbar-keep');
 
     if (hasFiles) {
       filesEl.innerHTML = '<span class="codicon codicon-chevron-right"></span> ' + fileCount + ' File' + (fileCount !== 1 ? 's' : '');
@@ -332,8 +332,8 @@
 
     stopBtn.classList.toggle('hidden', !showToolbarActive || !hasStop);
     reviewBtn.classList.toggle('hidden', !hasReview);
-    if (acceptBtn) acceptBtn.classList.toggle('hidden', !hasAccept);
-    if (rejectBtn) rejectBtn.classList.toggle('hidden', !hasReject);
+    if (undoBtn) undoBtn.classList.toggle('hidden', !hasUndo);
+    if (keepBtn) keepBtn.classList.toggle('hidden', !hasKeep);
   }
 
   document.addEventListener('DOMContentLoaded', init);

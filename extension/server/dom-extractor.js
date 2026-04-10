@@ -123,8 +123,12 @@ function getExtractionScript() {
               const resultPre = node.querySelector('.mcp-tool-result-preformatted');
               const mcpResult = resultPre ? textOf(resultPre) : '';
 
-              const bodyEl = node.querySelector('.composer-tool-call-body-content');
-              const bodyText = bodyEl ? textOf(bodyEl) : '';
+              const hasMcpData = mcpParams.length > 0 || mcpResult;
+              let bodyText;
+              if (!hasMcpData) {
+                const bodyEl = node.querySelector('.composer-tool-call-body-content');
+                bodyText = bodyEl ? textOf(bodyEl) : '';
+              }
 
               parts.push({
                 type: 'tool_call',
@@ -348,11 +352,14 @@ function getExtractionScript() {
     let toolbarFileCount = 0;
     if (toolbarSection) {
       toolbarSection.querySelectorAll('.anysphere-text-button, .anysphere-secondary-button').forEach(btn => {
-        const btnText = textOf(btn).replace(/Ctrl.*$|Shift.*$|⌘.*$|⌫.*$/i, '').trim();
-        toolbarButtons.push({
-          text: btnText,
-          cls: (btn.className || '').substring(0, 150),
-        });
+        const truncEl = btn.querySelector('.truncate');
+        const btnText = truncEl ? textOf(truncEl) : textOf(btn).split(/Ctrl|Shift|⌘|⌫/)[0].trim();
+        if (btnText) {
+          toolbarButtons.push({
+            text: btnText,
+            cls: (btn.className || '').substring(0, 150),
+          });
+        }
       });
       const fileText = toolbarSection.textContent || '';
       const fileMatch = fileText.match(/(\\d+)\\s*Files?/i);

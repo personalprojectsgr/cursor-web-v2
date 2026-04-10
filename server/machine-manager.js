@@ -448,34 +448,32 @@ class MachineManager {
           return result || { ok: true };
         }
 
-        case 'accept_all': {
+        case 'undo_all': {
           const result = await client.evaluateJSON(`(() => {
             const auxBar = document.getElementById('workbench.parts.auxiliarybar');
             const section = auxBar && auxBar.querySelector('#composer-toolbar-section');
             if (!section) return JSON.stringify({ ok: false, error: 'Toolbar not found' });
             const btns = section.querySelectorAll('.anysphere-text-button, .anysphere-secondary-button');
             for (const btn of btns) {
-              if (/accept/i.test(btn.textContent)) { btn.click(); return JSON.stringify({ ok: true }); }
+              const label = btn.querySelector('.truncate');
+              if (label && /undo/i.test(label.textContent)) { btn.click(); return JSON.stringify({ ok: true }); }
             }
-            const check = auxBar.querySelector('.codicon-check-circled');
-            if (check) { check.closest('button, [role="button"], div[class*="button"]')?.click() || check.click(); return JSON.stringify({ ok: true }); }
-            return JSON.stringify({ ok: false, error: 'Accept button not found' });
+            return JSON.stringify({ ok: false, error: 'Undo All button not found' });
           })()`);
           return result || { ok: false, error: 'Evaluation failed' };
         }
 
-        case 'reject_all': {
+        case 'keep_all': {
           const result = await client.evaluateJSON(`(() => {
             const auxBar = document.getElementById('workbench.parts.auxiliarybar');
             const section = auxBar && auxBar.querySelector('#composer-toolbar-section');
             if (!section) return JSON.stringify({ ok: false, error: 'Toolbar not found' });
             const btns = section.querySelectorAll('.anysphere-text-button, .anysphere-secondary-button');
             for (const btn of btns) {
-              if (/reject/i.test(btn.textContent)) { btn.click(); return JSON.stringify({ ok: true }); }
+              const label = btn.querySelector('.truncate');
+              if (label && /keep/i.test(label.textContent)) { btn.click(); return JSON.stringify({ ok: true }); }
             }
-            const restore = auxBar.querySelector('.codicon-restore');
-            if (restore) { restore.closest('button, [role="button"], div[class*="button"]')?.click() || restore.click(); return JSON.stringify({ ok: true }); }
-            return JSON.stringify({ ok: false, error: 'Reject button not found' });
+            return JSON.stringify({ ok: false, error: 'Keep All button not found' });
           })()`);
           return result || { ok: false, error: 'Evaluation failed' };
         }
