@@ -18,18 +18,18 @@ The only MCP tool exposed. It blocks until the user sends a message from the web
 
 ### Loop Mechanism
 
-1. Agent calls `wait_for_response` → server holds for up to 4 minutes
+1. Agent calls `wait_for_response` → server holds for up to 14 minutes
 2. If user sends a message → resolve immediately with message content (text + optional images)
-3. If 4 minutes pass with no message → return keepalive text: `[keepalive] No user message received. Call wait_for_response again to continue waiting.`
+3. If 14 minutes pass with no message → return keepalive text: `[keepalive] No user message received. Call wait_for_response again to continue waiting.`
 4. Agent sees keepalive → immediately calls `wait_for_response` again (enforced by Cursor rules)
 5. This creates an infinite loop that only stops when the user sends `/stop`
 
-### Why 4 Minutes?
+### Why 14 Minutes?
 
-- Railway has a hard 15-minute HTTP request timeout — 4 minutes gives safe margin
-- Cursor's MCP tool timeout defaults to 60s but is configurable — 4 minutes works with extended settings
-- Every 4 minutes, the agent gets a fresh HTTP/SSE connection — no stale stream issues
-- Worst-case message delivery latency is 4 minutes (message arrives right after keepalive)
+- Railway has a hard 15-minute HTTP request timeout — 14 minutes stays just under the limit
+- SSE pings every 30 seconds keep the connection alive through Railway's 60-second proxy keep-alive
+- Fewer reconnection cycles means less chance of binding issues or missed messages
+- Worst-case message delivery latency is 14 minutes (message arrives right after keepalive)
 
 ### Session Lifecycle
 
@@ -37,7 +37,7 @@ The only MCP tool exposed. It blocks until the user sends a message from the web
 MCP INIT (POST /mcp) → session created (unbound)
   ↓
 wait_for_response called → auto-bind to a chat via CDP state → session "waiting"
-  ↓ (4min keepalive)            ↓ (user message)
+  ↓ (14min keepalive)           ↓ (user message)
 return keepalive text           return message content
   ↓                             ↓
 agent calls again               agent processes, calls again
