@@ -308,7 +308,12 @@ class SessionManager {
     if (!sess) {
       await this._storeDeferred(targetChatKey, result, id, t);
       const allSessions = [...this.sessions.values()].filter(s => s.isAlive).map(s => ({ sid: s.shortId, ck: s.chatKey, cid: s.chatId, w: s.hasWaiter }));
-      log.warn('ROUTE deferred (no session)', { t, targetCK: targetChatKey, alive: allSessions });
+      log.warn('ROUTE no bound session, polling for bind', { t, targetCK: targetChatKey, alive: allSessions });
+
+      const bound = await this._pollForBoundSession(targetChatKey, id, t);
+      if (bound) return bound;
+
+      log.warn('ROUTE deferred (no session after poll)', { t, targetCK: targetChatKey });
       return { accepted: true, id, status: 'deferred' };
     }
 
@@ -348,6 +353,35 @@ class SessionManager {
       log.error('ROUTE resolve failed', { t, sid: sess.shortId, error: e.message, sseAlive });
     }
     return { accepted: true, id, status: 'delivered' };
+  }
+
+  _pollForBoundSession(targetChatKey, msgId, t) {
+    const started = Date.now();
+    const maxWait = 60_000;
+    return new Promise((resolve) => {
+      const check = async () => {
+        if (this.deliveredLog.some(d => d.id === msgId)) {
+          log.info('ROUTE poll-bound already consumed', { t, ck: targetChatKey, elapsed: Date.now() - started });
+          resolve({ accepted: true, id: msgId, status: 'delivered-via-deferred' });
+          return;
+        }
+        const sess = this._findBoundSession(targetChatKey);
+        if (sess && sess.hasWaiter) {
+          if (redis.isAvailable()) {
+            await redis.publishInput(targetChatKey);
+          }
+          log.info('ROUTE poll-bound notify waiter', { t, sid: sess.shortId, ck: targetChatKey, elapsed: Date.now() - started });
+          resolve({ accepted: true, id: msgId, status: 'delivered-via-poll' });
+          return;
+        }
+        if ((Date.now() - started) > maxWait) {
+          resolve(null);
+          return;
+        }
+        setTimeout(check, 1000);
+      };
+      setTimeout(check, 1000);
+    });
   }
 
   _pollForWaiter(sess, result, id, t) {
