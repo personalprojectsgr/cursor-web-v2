@@ -68,10 +68,12 @@ a:hover { text-decoration: underline; }
 
 code {
   font-family: var(--cursor-font-mono);
-  font-size: 0.9em;
-  background: rgba(228, 228, 228, 0.037);
+  font-size: 11.7px;
+  font-weight: 600;
+  background: rgba(228, 228, 228, 0.074);
   padding: 1.5px 4px;
   border-radius: 5px;
+  color: rgb(129, 161, 193);
 }
 
 pre {
