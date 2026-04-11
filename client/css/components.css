@@ -619,8 +619,8 @@
   border: 1px solid rgba(228, 228, 228, 0.11);
   border-radius: 8px;
   padding: 0;
-  color: var(--cursor-text-secondary);
-  line-height: 18.2px;
+  color: var(--cursor-text-primary);
+  line-height: 19.5px;
   word-break: break-word;
   cursor: pointer;
   font-size: 13px;
@@ -677,6 +677,7 @@
   margin: 6px 0;
   display: flex;
   flex-direction: column;
+  gap: 6px;
 }
 
 .md-content li {
@@ -765,18 +766,21 @@
 /* --- Tool Call Block --- */
 .tool-call-block {
   margin: 0;
-  border: 1px solid rgba(228, 228, 228, 0.09);
+  border: 1px solid rgba(228, 228, 228, 0.11);
   border-radius: 8px;
   overflow: hidden;
   background: var(--cursor-bg);
-  padding: 4px 0 0;
+  padding: 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .tool-call-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 6px 3px 8px;
+  padding: 0 6px 0 8px;
   cursor: pointer;
   gap: 4px;
   transition: background 0.1s;
@@ -800,7 +804,7 @@
 
 .tool-call-desc {
   font-size: 13px;
-  color: var(--cursor-text-secondary);
+  color: rgba(228, 228, 228, 0.68);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -878,15 +882,20 @@
 
 .tool-call-block:not(.expanded) .tool-call-chevron { transform: rotate(0deg); }
 
-.tool-call-block.running .tool-call-desc { color: var(--cursor-text-primary); }
+.tool-call-block.running .tool-call-desc { color: rgba(228, 228, 228, 0.68); }
 
 .tool-call-verb {
-  color: var(--cursor-green);
-  font-weight: 500;
+  color: rgba(228, 228, 228, 0.68);
+  font-weight: 400;
+}
+
+.tool-call-toolname {
+  color: rgba(228, 228, 228, 0.50);
+  font-weight: 400;
 }
 
 .tool-call-server {
-  color: var(--cursor-text-muted);
+  color: rgba(228, 228, 228, 0.50);
   font-weight: 400;
 }
 
@@ -921,7 +930,7 @@
 /* --- Code Block --- */
 .code-block {
   margin: 4px 0;
-  border: 1px solid rgba(228, 228, 228, 0.09);
+  border: 1px solid rgba(228, 228, 228, 0.11);
   border-radius: 8px;
   overflow: hidden;
   background: var(--cursor-bg);
@@ -1019,7 +1028,7 @@
 /* --- Question Block --- */
 .question-block {
   margin: 4px 0;
-  border: 1px solid rgba(228, 228, 228, 0.09);
+  border: 1px solid rgba(228, 228, 228, 0.11);
   border-radius: 8px;
   padding: 10px;
   background: var(--cursor-bg);
@@ -1085,7 +1094,7 @@
   margin: 4px 0;
   padding: 8px 10px;
   background: var(--cursor-bg);
-  border: 1px solid rgba(228, 228, 228, 0.09);
+  border: 1px solid rgba(228, 228, 228, 0.11);
   border-radius: 8px;
   font-size: var(--cursor-font-size-sm);
   color: var(--cursor-text-secondary);
@@ -1094,7 +1103,7 @@
 /* --- Todo List Block --- */
 .todo-list-block {
   margin: 4px 0;
-  border: 1px solid rgba(228, 228, 228, 0.09);
+  border: 1px solid rgba(228, 228, 228, 0.11);
   border-radius: 8px;
   overflow: hidden;
   background: var(--cursor-bg);
@@ -1391,12 +1400,12 @@
 
 .input-box {
   background: rgba(228, 228, 228, 0.035);
-  border: 1px solid rgba(228, 228, 228, 0.147);
+  border: 1px solid rgba(228, 228, 228, 0.11);
   border-radius: 8px;
-  padding: 10px 12px 8px;
+  padding: 6px 8px 4px;
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 6px;
   transition: border-color 0.15s;
 }
 
@@ -1433,24 +1442,44 @@
 .input-bottom-right { display: flex; gap: 4px; align-items: center; }
 
 .pill {
-  padding: 3px 10px;
-  border-radius: 5px;
-  border: 1px solid var(--cursor-border);
-  background: rgba(228, 228, 228, 0.03);
-  color: var(--cursor-text-secondary);
+  padding: 2px 4px 2px 8px;
+  border-radius: 9999px;
+  border: none;
+  background: rgba(228, 228, 228, 0.13);
+  color: var(--cursor-text-primary);
   font-size: var(--cursor-font-size-sm);
   font-family: var(--cursor-font);
   cursor: pointer;
   transition: all 0.15s;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
-.pill:hover { background: var(--cursor-bg-hover); color: var(--cursor-text-primary); border-color: rgba(228, 228, 228, 0.12); }
+.pill:hover { background: rgba(228, 228, 228, 0.17); color: var(--cursor-text-primary); }
+
+.pill-model {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 0 4px;
+  height: 20px;
+  color: rgba(228, 228, 228, 0.68);
+}
+
+.pill-model:hover { background: var(--cursor-bg-hover); color: var(--cursor-text-primary); }
 
 @media (max-width: 1023px) {
   .pill {
-    padding: 4px 10px;
+    padding: 2px 6px 2px 10px;
     font-size: 12px;
-    min-height: 28px;
+    height: 22px;
+  }
+
+  .pill-model {
+    padding: 0 6px;
+    height: 24px;
   }
 }
 

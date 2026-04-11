@@ -232,7 +232,7 @@
       var toolName = part.toolName || '';
       var serverName = part.serverName || '';
       desc.innerHTML = '<span class="tool-call-verb">' + CA.escapeHtml(verb) + '</span> ' +
-        '<strong>' + CA.escapeHtml(toolName) + '</strong>' +
+        '<span class="tool-call-toolname">' + CA.escapeHtml(toolName) + '</span>' +
         (serverName ? ' <span class="tool-call-server">in ' + CA.escapeHtml(serverName) + '</span>' : '');
     } else {
       desc.textContent = part.description || 'Tool call';
